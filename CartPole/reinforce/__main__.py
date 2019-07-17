@@ -11,17 +11,21 @@ from random import choices
 from reinforce.network import Policy, Baseline
 
 L = 0.99    # Discount
+C = 10      # How often to render the episode.
+E = 10000   # Episodes
+policy_LR = 1e-2
+baseline_LR = 2e-1
 
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 available_actions = [0, 1]
 
 policy = Policy(); policy.to(device)
 baseline = Baseline(); baseline.to(device)
 
-policy_opt = Adam(policy.parameters(), lr=1e-2)
-baseline_opt = Adam(baseline.parameters(), lr=2e-1)
+policy_opt = Adam(policy.parameters(), lr=policy_LR)
+baseline_opt = Adam(baseline.parameters(), lr=baseline_LR)
 
-for e in range(10000):
+for e in range(E):
     
     states = []
     actions = []
@@ -39,7 +43,7 @@ for e in range(10000):
         action = choices(available_actions, weights=action_dist, k=1)[0]
 
         next_state, reward, done, _ = env.step(action)
-        if e % 10 == 0:
+        if e % C == 0:
             env.render()
 
         tot_reward += reward

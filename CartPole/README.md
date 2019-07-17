@@ -2,4 +2,4 @@
 Currently bugged.
 
 # REINFORCE with adaptive baseline
-Reaches a full reward within 100 episodes.
+Reaches reward >200 within 100 episodes and full reward (500) within 200 episodes.
