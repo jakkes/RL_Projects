@@ -3,9 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class Actor(nn.Module):
+class Policy(nn.Module):
     def __init__(self):
-        super(Actor, self).__init__()
+        super(Policy, self).__init__()
         self.fc1 = nn.Linear(4, 16)
         self.fc2 = nn.Linear(16, 16)
         self.fc3 = nn.Linear(16, 2)
@@ -16,9 +16,9 @@ class Actor(nn.Module):
         return F.softmax(self.fc3(x), dim=1)
 
 
-class Critic(nn.Module):
+class Baseline(nn.Module):
     def __init__(self):
-        super(Critic, self).__init__()
+        super(Baseline, self).__init__()
         self.fc1 = nn.Linear(4, 16)
         self.fc2 = nn.Linear(16, 16)
         self.fc3 = nn.Linear(16, 1)
