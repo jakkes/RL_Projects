@@ -2,8 +2,7 @@ import gym
 
 import torch
 import torch.cuda as cuda
-from torch.optim import Adam
-from torch.nn import MSELoss
+from torch.optim import Adam, SGD
 device = 'cuda' if cuda.is_available() else 'cpu'
 
 from random import choices
@@ -11,55 +10,66 @@ from random import choices
 from a2c.network import Actor, Critic
 
 L = 0.99    # Discount
+C = 10000      # How often to render the episode.
+E = 10000   # Episodes
+actor_LR = 1e-3
+critic_LR = 1e-2
+entropy_weight = 0.001
 
-env = gym.make('CartPole-v0')
+env = gym.make('CartPole-v1')
 available_actions = [0, 1]
 
 actor = Actor(); actor.to(device)
 critic = Critic(); critic.to(device)
 
-actor_opt = Adam(actor.parameters(), lr=1e-2)
-critic_opt = Adam(actor.parameters(), lr=2e-1)
+actor_opt = Adam(actor.parameters(), lr=actor_LR)
+critic_opt = Adam(critic.parameters(), lr=critic_LR)
 
-mse_loss = MSELoss()
-
-for e in range(10000):
+for e in range(E):
     
-    current_state = torch.as_tensor(env.reset(), dtype=torch.float, device=device).view(1, 4)      # Reset environment
-    next_state = None
-    done = False
+    state = torch.as_tensor(env.reset(), device=device, dtype=torch.float).view(1, 4)
+    I = 1.0
 
-    tot_reward = 0
-    initial_value = critic(current_state).item()
+    tot_reward = 0.0
+    initial_value = critic(state).item()
+    
+    while True:
 
-    while not done:
-        action_probabilities = actor(current_state).view(-1)                            # Get policy in current state                                 
-        action = choices(available_actions, weights=action_probabilities, k=1)[0]       # Choose action according to policy
+        action_dist = actor(state).view(-1)
+        action = choices(available_actions, weights=action_dist, k=1)[0]
 
-        next_state, reward, done, _ = env.step(action)                                  # Take step
-        next_state = torch.as_tensor(next_state, dtype=torch.float, device=device).view(1, 4)          # Make state a torch tensor
-        tot_reward += reward                                                            # Store total reward
-
-        if e % 10 == 0:
+        next_state, reward, done, _ = env.step(action)
+        next_state = torch.as_tensor(next_state, device=device, dtype=torch.float).view(1, 4)
+        if e % C == 0:
             env.render()
 
-        td_target = reward
-        if not done:
-            td_target += L * critic(next_state).detach()
-                                                                                        
-        V = critic(current_state)
+        tot_reward += reward
 
-        critic_loss = - (td_target - V.detach()) * V
+        if done:
+            td_target = reward
+        else:
+            td_target = reward + L * critic(next_state).detach()
+        V = critic(state)
+        delta = td_target - V.detach()
+
+        critic.train(True)
+        critic_loss = - I * (delta * V).mean()
         critic_opt.zero_grad()
         critic_loss.backward()
         critic_opt.step()
-        
-        actor_loss = - (td_target - V.detach()) * torch.log(action_probabilities[action])
+        critic.train(False)
+
+        actor.train(True)
+        actor_loss = - I * (delta * torch.log(action_dist[action])).mean() + entropy_weight * (action_dist[action] * torch.log(action_dist[action])).mean()
         actor_opt.zero_grad()
         actor_loss.backward()
         actor_opt.step()
+        actor.train(False)
 
-        current_state = next_state
+        state = next_state
+        I = I * L
+        if done:
+            break
 
     print("Episode {} - Reward {} - Initial value {}".format(
         e, tot_reward, initial_value

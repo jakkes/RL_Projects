@@ -11,12 +11,13 @@ from random import choices
 from reinforce.network import Policy, Baseline
 
 L = 0.99    # Discount
-C = 10      # How often to render the episode.
+C = 50
+R = 100
 E = 10000   # Episodes
 policy_LR = 1e-2
-baseline_LR = 2e-1
+baseline_LR = 2e-2
 
-env = gym.make('CartPole-v1')
+env = gym.make('LunarLander-v2')
 available_actions = [0, 1]
 
 policy = Policy(); policy.to(device)
@@ -35,15 +36,15 @@ for e in range(E):
     state = env.reset()
 
     tot_reward = 0.0
-    initial_value = baseline(torch.as_tensor(state, device=device, dtype=torch.float).view(1, 4)).item()
+    initial_value = baseline(torch.as_tensor(state, device=device, dtype=torch.float).view(1, 8)).item()
     
     while True:
 
-        action_dist = policy(torch.as_tensor(state, device=device, dtype=torch.float).view(1, 4)).view(-1)
+        action_dist = policy(torch.as_tensor(state, device=device, dtype=torch.float).view(1, 8)).view(-1)
         action = choices(available_actions, weights=action_dist, k=1)[0]
 
         next_state, reward, done, _ = env.step(action)
-        if e % C == 0:
+        if e % R == 0:
             env.render()
 
         tot_reward += reward
@@ -65,8 +66,8 @@ for e in range(E):
         G[-i] = rewards[-i] + L * G[-(i-1)]
 
     V = baseline(torch.as_tensor(states, device=device, dtype=torch.float)).view(-1)
-    # delta = torch.pow(L, torch.arange(0, n).float()) * (G - V.detach())
-    delta = (G - V.detach())
+    delta = torch.pow(L, torch.arange(0, n).float()) * (G - V.detach())
+    # delta = (G - V.detach())
     
     baseline_loss = - (delta * V).mean()
     policy_loss = - (delta * torch.log(torch.stack(action_dists)[torch.arange(0,n), actions])).mean()
@@ -80,3 +81,7 @@ for e in range(E):
     policy_opt.step()
 
     print("Episode {} - Reward {} - Initial V {}".format(e, tot_reward, initial_value))
+
+    if e % C == 0 and e != 0:
+        torch.save(policy.state_dict(), './reinforce/models/policy')
+        torch.save(baseline.state_dict(), './reinforce/models/baseline')
