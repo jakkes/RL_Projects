@@ -1,4 +1,4 @@
-# Reinforcement Learning
+# Reinforcement Learning (Work in progress)
 A collection of environments and applications of different Reinforcement learning algorithms to these environments. Some environments are part of the OpenAI Gym package, while some are self made.
 
 ## Project structure
