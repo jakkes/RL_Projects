@@ -1,46 +1,123 @@
+import numpy as np
+import arcade
+
 from random import choice
-import snake.env as env
-from snake.point import Point
+from typing import Tuple
+from random import randint
 
-class Game:
-    def __init__(self):
+class Point:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+    def __add__(self, point):
+        return Point(self.x + point.x, self.y + point.y)
+
+    def __sub__(self, point):
+        return Point(self.x - point.x, self.y - point.y)
+
+    def __eq__(self, point):
+        return self.x == point.x and self.y == point.y
+
+    def checker_board_distance_to(self, other) -> int:
+        return abs(self.x - other.x) + abs(self.y - other.y)
+
+    @staticmethod
+    def get_random(width, height):
+        return Point(randint(0, width-1), randint(0, height-1))
+
+class Snake:
+    def __init__(self, version: int = 0):
         
-        self.player = Player(Point.get_random())
-        self.direction = choice([
-            Game.Direction.left,
-            Game.Direction.right,
-            Game.Direction.up,
-            Game.Direction.down
-        ])
+        self._version = 0
+        self._conf = Config.get_version_config(version) # type: Config
 
-        self.apple = Point.get_random()
-        self.status = Game.Status.Alive
-            
-    def set_direction(self, direction: Point):
+        self._available_actions = [
+            Snake.Direction.left,
+            Snake.Direction.right,
+            Snake.Direction.up,
+            Snake.Direction.down
+        ]
+
+        self.player = None
+        self.apple = None
+        self.should_reset = True
+
+        self._frame = None
+
+    def reset(self):
+        self.player = Player(Point.get_random(self._conf.width, self._conf.height))
+        self.apple = Point.get_random(self._conf.width, self._conf.height)
+        self.should_reset = False
+    
+    def step(self, action: int) -> Tuple:
+        if self.should_reset:
+            raise ValueError("Must call reset() when done=True has been returned once.")
+        if action < 0 or action > 3:
+            raise ValueError("Action must be an integer in [0, 3].")
         
-        if len(self.player.positions) <= 1:
-            self.direction = direction
-            return
+        self.player.move(self._available_actions[action])
 
-        difference_since_last_step = self.player.get_head() - self.player.get_position_idx(1)
-        if direction == Game.Direction.right and difference_since_last_step != Game.Direction.left:
-            self.direction = Game.Direction.right
-        elif direction == Game.Direction.left and difference_since_last_step != Game.Direction.right:
-            self.direction = Game.Direction.left
-        elif direction == Game.Direction.up and difference_since_last_step != Game.Direction.down:
-            self.direction = Game.Direction.up
-        elif direction == Game.Direction.down and difference_since_last_step != Game.Direction.up:
-            self.direction = Game.Direction.down
-
-    def tick(self):
-        self.player.move(self.direction)
-        if self.player.check_collision_walls() or self.player.check_self_collision():
-            self.status = Game.Status.Dead
-
-        if self.player.get_head() == self.apple:
-            self.apple = Point.get_random()
+        done = self._check_collision_walls() or self._check_self_collision()
+        if done:
+            reward = -10
+            self.should_reset = True
+        elif self.player.get_head() == self.apple:
+            reward = 10
+            self.apple = Point.get_random(self._conf.width, self._conf.height)
             self.player.grow()
+        else:
+            reward = 0.1 if self.player.get_head().checker_board_distance_to(self.apple) < self.player.get_position_idx(1).checker_board_distance_to(self.apple) else -0.1
+        state = self._get_state()
 
+        return state, reward, done, {}
+
+    def _check_collision_walls(self):
+        head = self.player.get_head()
+        return head.x >= self._conf.width or head.x < 0 or head.y < 0 or head.y >= self._conf.height
+            
+    def _check_self_collision(self):
+        head = self.player.get_head()
+        return any(head == self.player.get_position_idx(i) for i in range(1, len(self.player.positions)))
+
+    def _get_state(self):
+        state = np.zeros((2, self._conf.width, self._conf.height))
+        
+        for pos in self.player.positions:
+            try:
+                state[0, pos.x, pos.y] = 1
+            except IndexError:
+                pass
+        state[1, self.apple.x, self.apple.y] = 1
+        return state
+
+    def render(self):
+        if self._frame is None:
+            self._frame = arcade.Window(10 * self._conf.width, 10 * self._conf.height)
+
+        arcade.start_render()
+        self._draw_player()
+        self._draw_apple()
+        arcade.finish_render()
+    
+    def _draw_player(self):
+        for pos in self.player.positions:
+            arcade.draw_xywh_rectangle_filled(
+                10 * pos.x,
+                10 * pos.y,
+                10,
+                10,
+                arcade.color.GREEN
+            )
+
+    def _draw_apple(self):
+        arcade.draw_xywh_rectangle_filled(
+                10 * self.apple.x,
+                10 * self.apple.y,
+                10,
+                10,
+                arcade.color.RED
+            )
 
     class Direction:
         left = Point(-1, 0)
@@ -48,14 +125,11 @@ class Game:
         up = Point(0, 1)
         down = Point(0, -1)
 
-    class Status: 
-        Alive = 1
-        Dead = -1
 
 class Player:
     def __init__(self, start: Point):
         self.positions = [start]
-        self.length = env.START_LENGTH
+        self.length = 5
 
     def move(self, direction: Point):
         self.positions = [self.get_head() + direction] + self.positions[0:self.length - 1]
@@ -66,13 +140,22 @@ class Player:
     def get_position_idx(self, idx: int):
         return self.positions[idx]
 
-    def check_collision_walls(self):
-        head = self.get_head()
-        return head.x >= env.GAME_WIDTH or head.x < 0 or head.y < 0 or head.y >= env.GAME_HEIGHT
-            
-    def check_self_collision(self):
-        head = self.get_head()
-        return any(head == self.get_position_idx(i) for i in range(1, len(self.positions)))
-
     def grow(self):
-        self.length += 2
+        self.length += 1
+
+
+class Config:
+
+    def __init__(self, width: int, height: int, start_length: int):
+        self.width = width
+        self.height = height
+        self.start_length = start_length
+
+    @staticmethod
+    def get_version_config(version: int):
+        if version == 0:
+            return Config(5, 5, 3)
+        elif version == 1:
+            return Config(20, 20, 5)
+        else:
+            raise ValueError("Unknown version {}".format(version))

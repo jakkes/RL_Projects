@@ -6,7 +6,7 @@ import torch.nn.functional as F
 class Policy(nn.Module):
     def __init__(self):
         super(Policy, self).__init__()
-        self.conv1 = nn.Conv2d(3, 128, 5, padding=2)
+        self.conv1 = nn.Conv2d(2, 128, 5, padding=2)
         self.conv2 = nn.Conv2d(128, 64, 3)
         self.conv3 = nn.Conv2d(64, 32, 3)
         self.conv4 = nn.Conv2d(32, 32, 3)
