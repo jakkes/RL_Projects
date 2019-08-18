@@ -13,7 +13,7 @@ class Replay:
         self._dones = torch.empty(self.capacity, device=device)
         self.position = 0
         self.full_loop = False
-
+        
     def add(self, state, next_state, action, reward, done):
         self._states[self.position] = state
         self._next_state[self.position] = next_state
@@ -24,11 +24,10 @@ class Replay:
         if self.position >= self.capacity:
             if not self.full_loop:
                 self.full_loop = True
-            self.position = 0
+            self.position = self.capacity // 2
 
-    def get_random(self, n: int) -> Tuple:
-        population = range(self.capacity) if self.full_loop else range(self.position)
-        indices = choices(population, k=n)
+    def get_random(self, n: int):
+        indices = torch.randint(low=0, high=self.count(), size=(n, ))
         return (
             self._states[indices],
             self._next_state[indices],

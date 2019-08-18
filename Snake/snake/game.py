@@ -49,6 +49,7 @@ class Snake:
         self.player = Player(Point.get_random(self._conf.width, self._conf.height))
         self.apple = Point.get_random(self._conf.width, self._conf.height)
         self.should_reset = False
+        return self._get_state()
     
     def step(self, action: int) -> Tuple:
         if self.should_reset:
@@ -81,7 +82,7 @@ class Snake:
         return any(head == self.player.get_position_idx(i) for i in range(1, len(self.player.positions)))
 
     def _get_state(self):
-        state = np.zeros((2, self._conf.width, self._conf.height))
+        state = np.zeros((3, self._conf.width, self._conf.height))
         
         for pos in self.player.positions:
             try:
@@ -89,6 +90,10 @@ class Snake:
             except IndexError:
                 pass
         state[1, self.apple.x, self.apple.y] = 1
+        try:
+            state[2, self.player.positions[0].x, self.player.positions[0].y] = 1
+        except IndexError:
+            pass
         return state
 
     def render(self):
