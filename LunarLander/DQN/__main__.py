@@ -1,97 +1,107 @@
 from DQN.replay import Replay
-from DQN.networks import Net
+import matplotlib.pyplot as plt
 
 import torch
-from torch.optim import Adam
-from torch.nn import MSELoss
+from torch import nn, optim
 
 import gym
 env = gym.make("LunarLander-v2")
 
 from copy import deepcopy
-from random import randint, random
+from random import randrange, random
 
-C = 15      # How often to update target network
+C = 10      # How often to update target network
 M = 100000   # Replay memory size
 TRAIN_START = 1000
-EPS = 1.0  # Epsilon greedy
-MIN_EPS = 0.0001
+EPS = 0.5  # Epsilon greedy
+MIN_EPS = 0.01
 DECAY_EPS = 0.995
 Lambda = 0.99   # Discount
-B = 64      # Batch size
-
-actions = [0, 1, 2, 3]
+B = 16      # Batch size
 
 replay = Replay(M)
-network = Net()
+network = nn.Sequential(
+    nn.Linear(8, 128), nn.SELU(inplace=True),
+    nn.Linear(128, 64), nn.SELU(inplace=True),
+    nn.Linear(64, 32), nn.SELU(inplace=True),
+    nn.Linear(32, 4)
+)
 target_network = deepcopy(network)
+target_network.requires_grad_(False)
 
-opt = Adam(network.parameters(), lr=1e-3)
-loss_fn = MSELoss()
+opt = optim.Adam(network.parameters(), lr=1e-4)
+loss_fn = nn.MSELoss()
 
-EPS = EPS / DECAY_EPS**10
+mean_reward = 0.0
+mean_rewards = [0.0]
 
-counter = 0
-while True:
-    counter += 1
+steps = 0
+for episode in range(100000):
     
-    prev_state = None
     state = torch.as_tensor(env.reset())
+    with torch.no_grad():
+        start_value = network(state.unsqueeze(0)).max().item()
 
-    if counter % C == 0:
-        target = deepcopy(network)
-    
-    print("Episode {} - Epsilon {} - Q-value {}".format(
-        counter, EPS, network(state.view(1, 8)).max().item()
-    ))
-
-    done = 1
-
-    while done == 1:
+    done = False
+    episode_steps = 0
+    total_reward = 0
+    while not done:
         
-        if random() < EPS or replay.count() < TRAIN_START:
-            action = randint(0, 3)
+        if random() < EPS:
+            action = randrange(4)
         else:
-            action = network(state.view((1, ) + state.shape)).argmax().item()
+            action = network(state.unsqueeze(0)).argmax().item()
 
-        prev_state = state
-        state, reward, done, _ = env.step(action)
-        state = torch.as_tensor(state)
-        done = 1 if not done else 0
+        next_state, reward, done, _ = env.step(action)
+        next_state = torch.as_tensor(state)
+        total_reward += reward
 
-        replay.add( (prev_state, state, action, reward, done) )
+        if episode_steps >= 500:
+            done = True
+
+        replay.add(state, action, reward, not done, next_state)
 
         if replay.count() > TRAIN_START:
 
-            states = torch.empty(B, 8)
-            next_states = torch.empty(B, 8)
-            all_actions = torch.empty(B, dtype=torch.long)
-            rewards = torch.empty(B)
-            dones = torch.empty(B)
+            if steps % C == 0:
+                target_network.load_state_dict(network.state_dict())
+                target_network.requires_grad_(False)
 
-            for i in range(B):
-                s, sp, a, r, d = replay.get_random()
-                states[i,:] = s
-                next_states[i,:] = sp
-                all_actions[i] = a
-                rewards[i] = r
-                dones[i] = d
+            states, actions, rewards, not_dones, next_states = replay.sample(B)
 
-            Q = network(states)         # type: torch.Tensor
-            Q = Q[torch.arange(0,B), all_actions]
-            
-            target_Q = rewards + Lambda * dones * torch.max(target_network(next_states), dim=1).values.detach()
+            Q = network(states)[torch.arange(B), actions]
+
+            # with torch.no_grad():
+            #     next_greedy_action = network(next_states).argmax(dim=1)
+            # target_Q = rewards + Lambda * not_dones * target_network(next_states)[torch.arange(B), next_greedy_action]
+            target_Q = rewards + Lambda * not_dones * target_network(next_states).max(dim=1).values
 
             loss = loss_fn(Q, target_Q)
             opt.zero_grad()
             loss.backward()
             opt.step()
 
+            steps += 1
 
-        env.render()
-        if done == 0:
-            break
-            
-    EPS = EPS * DECAY_EPS
-    if EPS < MIN_EPS:
-        EPS = MIN_EPS
+        if episode % 100 == 0:
+            env.render()
+        episode_steps += 1
+
+    EPS = max(EPS * DECAY_EPS, MIN_EPS)
+
+    mean_reward += 0.1 * (total_reward - mean_reward)
+    mean_rewards.append(mean_reward)
+
+    if episode % 100 == 0:
+        plt.cla()
+        plt.plot(mean_rewards)
+        plt.pause(0.001)
+
+    print("""
+    Episode {}
+    Epsilon {}
+    Q-value {}
+    Reward  {}
+    """.format(
+        episode, EPS, start_value, mean_reward
+    ))
