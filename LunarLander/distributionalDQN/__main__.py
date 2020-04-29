@@ -1,8 +1,9 @@
-from DQN.replay import Replay
+from .replay import Replay
+from .network import Net
 import matplotlib.pyplot as plt
 
 import torch
-from torch import nn, optim
+from torch import nn, optim, Tensor
 
 import gym
 env = gym.make("LunarLander-v2")
@@ -11,36 +12,37 @@ from copy import deepcopy
 from random import randrange, random
 
 C = 10      # How often to update target network
-M = 100000   # Replay memory size
+M = 20000   # Replay memory size
 TRAIN_START = 1000
-EPS = 0.5  # Epsilon greedy
+EPS = 1.0  # Epsilon greedy
 MIN_EPS = 0.01
 DECAY_EPS = 0.995
 Lambda = 0.99   # Discount
-B = 16      # Batch size
+B = 32      # Batch size
+Vmax = 300
+Vmin = -300
+Natoms = 71
+
+z = torch.linspace(Vmin, Vmax, Natoms)
+dz = z[1] - z[0]
 
 replay = Replay(M)
-network = nn.Sequential(
-    nn.Linear(8, 128), nn.SELU(inplace=True),
-    nn.Linear(128, 64), nn.SELU(inplace=True),
-    nn.Linear(64, 32), nn.SELU(inplace=True),
-    nn.Linear(32, 4)
-)
-target_network = deepcopy(network)
+network = Net(z)
+target_network = Net(z)
 target_network.requires_grad_(False)
 
-opt = optim.Adam(network.parameters(), lr=1e-4)
-loss_fn = nn.MSELoss()
+opt = optim.Adam(network.parameters(), lr=1e-3)
+loss_fn = nn.SmoothL1Loss()
 
 mean_reward = 0.0
 mean_rewards = [0.0]
 
 steps = 0
-for episode in range(100000):
+for episode in range(10000):
     
     state = torch.as_tensor(env.reset())
     with torch.no_grad():
-        start_value = network(state.unsqueeze(0)).max().item()
+        start_value = network.getQ(state.unsqueeze(0)).max().item()
 
     done = False
     episode_steps = 0
@@ -50,7 +52,7 @@ for episode in range(100000):
         if random() < EPS:
             action = randrange(4)
         else:
-            action = network(state.unsqueeze(0)).argmax().item()
+            action = network.getQ(state.unsqueeze(0)).argmax().item()
 
         next_state, reward, done, _ = env.step(action)
         next_state = torch.as_tensor(state)
@@ -68,15 +70,31 @@ for episode in range(100000):
                 target_network.requires_grad_(False)
 
             states, actions, rewards, not_dones, next_states = replay.sample(B)
+            
+            nextp = target_network(next_states)
+            next_greedy_action = target_network.get_Q_from_p(nextp).argmax(dim=1)
+            nextgreedyp = nextp[torch.arange(B), next_greedy_action, :]         # shape B x Natoms
 
-            Q = network(states)[torch.arange(B), actions]
+            Tz = rewards.view(-1, 1) + Lambda * not_dones.view(-1, 1) * z.view(1, -1)
+            Tz.clamp_(Vmin, Vmax)
 
-            # with torch.no_grad():
-            #     next_greedy_action = network(next_states).argmax(dim=1)
-            # target_Q = rewards + Lambda * not_dones * target_network(next_states)[torch.arange(B), next_greedy_action]
-            target_Q = rewards + Lambda * not_dones * target_network(next_states).max(dim=1).values
+            b = (Tz - Vmin) / dz             # shape B x Natoms
+            l, u = b.floor().long(), b.ceil().long()
+            
+            # Fix disappearing mass
+            l[(u > 0) * (l == u)] -= 1
+            u[(l < (Natoms - 1)) * (l == u)] += 1
 
-            loss = loss_fn(Q, target_Q)
+            m = torch.zeros(B, Natoms)
+
+            offset = torch.linspace(0, ((B - 1) * Natoms), B).unsqueeze(1).expand(B, Natoms).to(actions)
+            m.view(-1).index_add_(0, (l + offset).view(-1), (nextgreedyp * (u.float() - b)).view(-1))
+            m.view(-1).index_add_(0, (u + offset).view(-1), (nextgreedyp * (b - l.float())).view(-1))
+
+            thisp: Tensor = network(states)[torch.arange(B), actions, :]
+            
+            loss = - (m * thisp.log_()).sum(dim=1).mean()
+
             opt.zero_grad()
             loss.backward()
             opt.step()
