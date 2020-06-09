@@ -6,6 +6,8 @@ from torch.optim import Adam
 from torch.nn import MSELoss
 device = 'cuda' if cuda.is_available() else 'cpu'
 
+print('device:',device)
+
 from random import choices
 
 from reinforce.network import Policy, Baseline

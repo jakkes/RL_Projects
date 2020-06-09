@@ -29,7 +29,7 @@ network = nn.Sequential(
 target_network = deepcopy(network)
 target_network.requires_grad_(False)
 
-opt = optim.Adam(network.parameters(), lr=1e-4)
+opt = optim.Adam(network.parameters(), lr=1e-3)
 loss_fn = nn.MSELoss()
 
 mean_reward = 0.0
@@ -80,6 +80,11 @@ for episode in range(100000):
             opt.zero_grad()
             loss.backward()
             opt.step()
+
+            tot_norm = 0
+            for p in network.parameters():
+                tot_norm += p.grad.norm(2)
+            print(tot_norm)
 
             steps += 1
 
