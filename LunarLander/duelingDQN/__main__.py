@@ -1,4 +1,5 @@
-from DQN.replay import Replay
+from .replay import Replay
+from .network import Net
 import matplotlib.pyplot as plt
 
 import torch
@@ -11,32 +12,27 @@ from copy import deepcopy
 from random import randrange, random
 
 C = 10      # How often to update target network
-M = 100000   # Replay memory size
-TRAIN_START = 1000
-EPS = 0.5  # Epsilon greedy
-MIN_EPS = 0.01
-DECAY_EPS = 0.995
+M = 20000   # Replay memory size
+TRAIN_START = 5000
+EPS = 1.0  # Epsilon greedy
+MIN_EPS = 0.1
+DECAY_EPS = 0.99
 Lambda = 0.99   # Discount
-B = 16      # Batch size
+B = 32      # Batch size
 
 replay = Replay(M)
-network = nn.Sequential(
-    nn.Linear(8, 128), nn.SELU(inplace=True),
-    nn.Linear(128, 64), nn.SELU(inplace=True),
-    nn.Linear(64, 32), nn.SELU(inplace=True),
-    nn.Linear(32, 4)
-)
-target_network = deepcopy(network)
+network = Net()
+target_network = Net()
 target_network.requires_grad_(False)
 
-opt = optim.Adam(network.parameters(), lr=1e-3)
-loss_fn = nn.MSELoss()
+opt = optim.Adam(network.parameters(), lr=1e-4)
+loss_fn = nn.SmoothL1Loss()
 
 mean_reward = 0.0
 mean_rewards = [0.0]
 
 steps = 0
-for episode in range(100000):
+for episode in range(10000):
     
     state = torch.as_tensor(env.reset())
     with torch.no_grad():
@@ -68,17 +64,19 @@ for episode in range(100000):
                 target_network.requires_grad_(False)
 
             states, actions, rewards, not_dones, next_states = replay.sample(B)
-
             Q = network(states)[torch.arange(B), actions]
 
-            # with torch.no_grad():
-            #     next_greedy_action = network(next_states).argmax(dim=1)
-            # target_Q = rewards + Lambda * not_dones * target_network(next_states)[torch.arange(B), next_greedy_action]
-            target_Q = rewards + Lambda * not_dones * target_network(next_states).max(dim=1).values
+            with torch.no_grad():
+                next_greedy_action = network(next_states).argmax(dim=1)
+            target_Q = rewards + Lambda * not_dones * target_network(next_states)[torch.arange(B), next_greedy_action]
 
+            # target_Q = rewards + Lambda * not_dones * target_network(next_states).max(dim=1).values
             loss = loss_fn(Q, target_Q)
+
             opt.zero_grad()
             loss.backward()
+            for param in network.parameters():
+                param.grad.data.clamp_(-1, 1)
             opt.step()
 
             tot_norm = 0

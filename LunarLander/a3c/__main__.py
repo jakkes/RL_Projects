@@ -1,116 +1,119 @@
-import torch
-from torch.optim import Adam
+from time import sleep
+from random import choices
 
 import gym
 
-from threading import Thread
-from random import choices
+import torch
+from torch import nn, optim, Tensor
+from torch.multiprocessing import Process, Queue
+from multiprocessing.connection import Connection
 
-from a3c.networks import Actor, Critic
+DISCOUNT = 0.99
+STEPS = 2
+N = 8
+B = 64
+EPISODE_LENGTH = 500
 
-L = 0.95
-N = 16
-N_TO_RENDER = 1
-BETA = 0.001
+class Worker(Process):
+    def __init__(self, conn: Queue):
+        super().__init__(daemon=True)
 
-actor = Actor()
-actor_opt = Adam(actor.parameters(), lr=1e-6)
-
-critic = Critic()
-critic_opt = Adam(critic.parameters(), lr=1e-5)
-
-available_actions = [0, 1, 2, 3]
-
-def run():
-    envs = [gym.make("LunarLander-v2") for _ in range(N)]
-
-    prev_states = torch.empty(N, 8)
-    states = torch.empty(N, 8)
-    dones = torch.zeros(N)
-    I = torch.ones(N, dtype=torch.float)
-
-    while running:
+        self.conn: Queue = conn
         
-        for i in range(N):
-            if dones[i] == 0:
-                prev_states[i, :] = torch.as_tensor(envs[i].reset())
-                dones[i] = 1
-                I[i] = 1.0
-            else:
-                prev_states[i, :] = states[i, :]
+    def run(self):
         
-        action_probabilities = actor(prev_states)
-        actions = torch.empty(N, dtype=torch.long)
-        rewards = torch.empty(N)
-
-        for i in range(N):
-            actions[i] = choices(available_actions, weights=action_probabilities[i, :], k=1)[0]
-            s, r, d, _ = envs[i].step(actions[i].item())
-            dones[i] = 1 if not d else 0
-            states[i, :] = torch.as_tensor(s)
-            rewards[i] = r
-
-        td_targets = rewards + L * dones * critic(states).detach()
-
-        delta = td_targets - critic(prev_states)
-        loss1 = (I * delta.pow(2)).mean()
-        critic_opt.zero_grad()
-        loss1.backward()
-        critic_opt.step()
-
-        delta = delta.detach()
-        loss2 = -(I * delta * torch.log(action_probabilities[torch.arange(0,N), actions])).mean() + BETA * torch.mean(torch.log(action_probabilities) * action_probabilities)
-        actor_opt.zero_grad()
-        loss2.backward()
-        actor_opt.step()
+        env = gym.make("LunarLander-v2")
         
-        I *= L
+        actor = self.conn.get()
+        critic = self.conn.get()
+        opt = optim.Adam(list(actor.parameters()) + list(critic.parameters()), lr=1e-4)
 
-        for i in range(N_TO_RENDER):
-            envs[i].render()
+        steps = 0
+        loss = torch.tensor(0.0)
+        while True:
+            
+            state = torch.as_tensor(env.reset()).view(1, -1)
+            done = False
 
-    for env in envs:
-        env.close()
+            episode_steps = 0
+            while not done:
+                episode_steps += 1
+                steps += 1
+                
+                action_probabilities: Tensor = actor(state).view(-1)
+                action = int(torch.sum(action_probabilities.cumsum(0) < torch.rand((1, ))))
 
+                reward = 0
+                for _ in range(STEPS):
+                    next_state, r, done, _ = env.step(action)
+                    reward += r
+                    if done:
+                        break
+                next_state = torch.as_tensor(next_state).view(1, -1)
+
+                if episode_steps > EPISODE_LENGTH:
+                    done = True
+
+                with torch.no_grad():
+                    if done:
+                        td_target = reward
+                    else:
+                        td_target = reward + DISCOUNT * critic(next_state)[0, 0]
+
+                delta = td_target - critic(state)[0, 0]
+
+                loss += delta.pow(2) - delta.detach() * torch.log(action_probabilities[action])
+
+                if steps % B == 0:
+                    opt.zero_grad()
+                    loss.backward()
+                    opt.step()
+                    loss = 0
+
+                state = next_state
+
+
+
+if __name__ == "__main__":
     
+    actor = nn.Sequential(nn.Linear(8, 64), nn.ReLU(inplace=True), nn.Linear(64, 64), nn.ReLU(inplace=True), nn.Linear(64, 4), nn.Softmax(dim=1))
+    actor.share_memory()
+    critic = nn.Sequential(nn.Linear(8, 64), nn.ReLU(inplace=True), nn.Linear(64, 64), nn.ReLU(inplace=True), nn.Linear(64, 1))
+    critic.share_memory()
 
-running = False
-run_thread = Thread(target=run)
+    queues = [Queue() for _ in range(N)]
+    for q in queues:
+        q.put(actor); q.put(critic)
 
-while True:
-    try:
-        print()
-        print("S - start/stop")
-        print("R - restart")
-        print("N<int> - Change number of envs")
-        print("R<int> - Change number of renders")
+    workers = [Worker(q) for q in queues]
+    for worker in workers:
+        worker.start()
 
-        choice = input("Write your choice: ").lower()   # type: str
+    env = gym.make("LunarLander-v2")
+    
+    while True:
 
-        if choice == "s":
-            running = not running
-            if running:
-                run_thread = Thread(target=run)
-                run_thread.start()
-            else:
-                run_thread.join()
-        elif choice == "r":
-            if not running:
-                running = True
-                run_thread = Thread(target=run)
-                run_thread.start()
-            else:
-                running = False
-                run_thread.join()
-                running = True
-                run_thread = Thread(target=run)
-                run_thread.start()
-        elif choice.startswith("n"):
-            N = int(choice[1:])
-            if N < N_TO_RENDER:
-                N = N_TO_RENDER
-        elif choice.startswith("r"):
-            N_TO_RENDER = int(choice[1:])
+        done = False
+        state = torch.as_tensor(env.reset()).view(1, -1)
+        tot_reward = 0
+        episode_steps = 0
+        while not done:
+            episode_steps += 1
+            action_probabilities = actor(state).view(-1)
+            action = int(torch.sum(action_probabilities.cumsum(0) < torch.rand((1, ))))
 
-    except Exception:
-        continue
+            reward = 0
+            for _ in range(STEPS):
+                state, r, done, _ = env.step(action)
+                reward += r
+                if done:
+                    break
+            state = torch.as_tensor(state).view(1, -1)
+            tot_reward += reward
+
+            if episode_steps > EPISODE_LENGTH:
+                done = True
+
+            env.render()
+
+        print(tot_reward)
