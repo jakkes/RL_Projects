@@ -20,22 +20,25 @@ class NoisyLinear(nn.Linear):
         else:
             self.register_parameter('bias', None)
 
-        self.register_buffer('weps', torch.zeros(in_features))
+        self.register_buffer('weps', torch.zeros(out_features, in_features))
         self.register_buffer('beps', torch.zeros(out_features))
 
     def forward(self, x):
         if self.training:
-            epsin = self.get_noise(self.in_features)
-            epsout = self.get_noise(self.out_features)
-            self.weps.copy_(epsout.ger(epsin))
-            self.beps.copy_(self.get_noise(self.out_features))
+            epsin = NoisyLinear.get_noise(self.in_features)
+            epsout = NoisyLinear.get_noise(self.out_features)
+            self.weps = epsout.ger(epsin)
+            self.beps = self.get_noise(self.out_features)
+            # self.weps.copy_(epsout.ger(epsin))
+            # self.beps.copy_(self.get_noise(self.out_features))
 
             return super().forward(x) + F.linear(x, self.noise_weight * self.weps, self.noise_bias * self.beps)
         else:
             return super().forward(x)
 
+    @staticmethod
     @torch.jit.script
-    def get_noise(self, size: int) -> Tensor:
+    def get_noise(size: int) -> Tensor:
         x = torch.randn(size)
         return x.sign() * x.abs().sqrt_()
 

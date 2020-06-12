@@ -12,7 +12,8 @@ class RainbowConfig:
                     value_stream_hidden_layer_sizes: List[int], advantage_stream_hidden_layer_sizes: List[int], 
                     device: torch.device, no_atoms: int, Vmax: float, Vmin: float, std_init: float, 
                     optimizer: Optimizer, optimizer_params: Dict[str, Any], n_steps: int, discount: float,
-                    replay_capacity: int, batchsize: int, beta_start: float, beta_end: float, beta_t_start: int, beta_t_end: int):
+                    replay_capacity: int, batchsize: int, beta_start: float, beta_end: float, beta_t_start: int, beta_t_end: int,
+                    alpha: float, target_update_freq: int):
         
 
         self.device: torch.device = device
@@ -35,11 +36,13 @@ class RainbowConfig:
         self.discount: float = discount
         self.replay_capacity: int = replay_capacity
         self.batchsize: int = batchsize
+        self.target_update_freq: int = target_update_freq
 
         self.beta_start: float = beta_start
         self.beta_end: float = beta_end
         self.beta_t_start: float = beta_t_start
         self.beta_t_end: float = beta_t_end
+        self.alpha: float = alpha
 
 class RainbowAgent:
     def __init__(self, config: RainbowConfig):
@@ -67,6 +70,8 @@ class RainbowAgent:
 
         self.train_steps = 0
 
+        self._batch_vec = torch.arange(self.config.batchsize)
+
     def _build_networks(self):
         self.Qnet = RainbowNet(self.config).to(self.config.device)
         self.Tnet = RainbowNet(self.config).requires_grad_(False).eval().to(self.config.device)
@@ -81,22 +86,28 @@ class RainbowAgent:
     def observe(self, state: Tensor, action: int, reward: float, not_done: bool, next_state: Tensor):
         self._states[self._n_step] = state
         self._actions[self._n_step] = action
-        self._rewards[(self._n_step + self.index_vector) % self.config.n_steps, self.index_vector] = reward
+        self._rewards[(self._n_step + self._index_vector) % self.config.n_steps, self._index_vector] = reward
 
         if not not_done:    # if done
-            num_to_report = self.config.n_steps if self.start_adding else self._n_step
+            num_to_report = self.config.n_steps if self._start_adding else self._n_step
             for i in range(num_to_report):
-                self.replay.add(self._states[i], self._actions[i], self._rewards[i], False, next_state)
+                self.replay.add(
+                    self._states[i], 
+                    self._actions[i], 
+                    (self._rewards[i] * self._discount_vector).sum(), 
+                    False, 
+                    next_state
+                )
             self._rewards.fill_(0)
             self._n_step = 0
             self._start_adding = False
         else:
             self._n_step += 1
-            if self.n_step >= self.config.n_steps:
+            if self._n_step >= self.config.n_steps:
                 self._start_adding = True
                 self._n_step = 0
             
-            if self.start_adding:
+            if self._start_adding:
                 self.replay.add(
                     self._states[self._n_step],
                     self._actions[self._n_step],
@@ -106,29 +117,44 @@ class RainbowAgent:
                 )
                 self._rewards[self._n_step].fill_(0.0)
 
-    @torch.jit.script
     def get_actions(self, states) -> Tensor:
         d = self.Qnet(states)
         expected_value = torch.sum(d * self.z.view(1, 1, -1), dim=2)
         return expected_value.argmax(dim=1)
 
     def train_step(self):
-        states, actions, rewards, not_dones, next_states, sample_prop = self.replay.sample(self.config.batchsize)
+        states, actions, rewards, not_dones, next_states, sample_prob = self.replay.sample(self.config.batchsize)
         beta = min(max(self._beta_coeff * (self.train_steps - self.config.beta_t_start) + self.config.beta_start, self.config.beta_start), self.config.beta_end)
 
-        current_distribution = self.Qnet(states)[:, actions, :]
+        current_distribution: Tensor = self.Qnet(states)[self._batch_vec, actions, :]
         target_distribution = self.Tnet(next_states)
-        next_greedy_actions = self.get_actions(next_states)
-        next_distribution = target_distribution[:, next_greedy_actions, :]
+        with torch.no_grad():
+            next_greedy_actions = self.get_actions(next_states)
+        next_distribution = target_distribution[self._batch_vec, next_greedy_actions, :]
 
         m = torch.zeros(self.config.batchsize, self.config.no_atoms)
-        projection = (rewards.view(-1, 1) + self.config.discount * self.z.view(1, -1)).clamp_(self.config.Vmin, self.config.Vmax)
+        projection = (rewards.view(-1, 1) + not_dones.view(-1, 1) * self.config.discount * self.z.view(1, -1)).clamp_(self.config.Vmin, self.config.Vmax)
         b = (projection - self.config.Vmin) / self.dz
         
         l = b.floor().to(torch.long); u = b.ceil().to(torch.long)
         l[(u > 0) * (l == u)] -= 1
         u[(l < (self.config.no_atoms - 1)) * (l == u)] += 1
 
-        
-        m[l] += next_distribution * (u - b)
-        m[u] += next_distribution * (b - l)
+        for batch in range(self.config.batchsize):
+            m[batch].put_(l[batch], next_distribution[batch] * (u[batch] - b[batch]), accumulate=True)
+            m[batch].put_(u[batch], next_distribution[batch] * (b[batch] - l[batch]), accumulate=True)
+
+        loss = - (m * current_distribution.add_(1e-6).log()).sum(1)
+
+        w = (1.0 / self.replay.get_size() / sample_prob) ** beta
+        w /= w.max()
+
+        self.opt.zero_grad()
+        (w * loss).mean().backward()
+        self.opt.step()
+
+        self.replay.update_weights(loss.detach().pow_(self.config.alpha))
+
+        self.train_steps += 1
+        if self.train_steps % self.config.target_update_freq == 0:
+            self._target_update()

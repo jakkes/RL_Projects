@@ -1,6 +1,7 @@
 from abc import abstractmethod
 from math import log2
 from typing import Tuple, Any, Union
+from threading import Lock
 
 import numpy as np
 
@@ -64,18 +65,18 @@ class ExperienceReplay(Replay):
 
 class PrioritizedReplayBuffer(Replay):
     def __init__(self, capacity: int):
-        
         super().__init__()
 
         if log2(capacity) % 1 != 0:
             raise ValueError("Capacity must be power of 2")
         
+        self.lock = Lock()
         self.capacity: int = capacity
         
         self._pos = 0
         self._full = False
         self._data = np.empty((capacity, 5), dtype=object)
-        self.weights = np.zeros(capacity * 2 - 1)
+        self.weights: np.ndarray = np.zeros(capacity * 2 - 1)
         self._wi = capacity - 1
         self._depth = int(log2(capacity))
 
@@ -89,9 +90,17 @@ class PrioritizedReplayBuffer(Replay):
     def get_size(self):
         return self.capacity if self._full else self._pos
 
-    def add(self, obj):
+    def add(self, obj, weight=None):
+        if weight is None:
+            weight = self._max
+        
+        self.lock.acquire()
         self._data[self._pos] = obj
-        self._set_weight(self._max, self._pos)
+        self._set_weight(weight, self._pos)
+
+        if self._indices is not None and self._indices_mask is not None:
+            self._indices_mask[self._indices == self._pos] = False
+        self.lock.release()
 
         self._pos += 1 
         if self._pos >= self.capacity:
@@ -100,19 +109,22 @@ class PrioritizedReplayBuffer(Replay):
 
     def add_multiple(self, objs: np.ndarray, weights: np.ndarray=None):
         size = objs.shape[0]
-        indices = np.mod(np.arange(self._pos, self._pos + size), self.capacity)
-        self._data[indices] = objs
         if weights is None:
-            self._set_weights(self._max, indices)
-        else:
-            self._set_weights(weights, indices)
+            weights = self._max
+        indices = np.mod(np.arange(self._pos, self._pos + size), self.capacity)
+        
+        self.lock.acquire()
+        self._data[indices] = objs
+        self._set_weights(weights, indices)
+        if self._indices is not None:
+            _, index_intersect, _ = np.intersect1d(self._indices, indices, return_indices=True)
+            self._indices_mask[index_intersect] = False
+        self.lock.release()
+
         self._pos = (self._pos + size) % self.capacity
         if self._pos < indices[0]:
             self._full = True
         
-        if self._indices is not None:
-            _, index_intersect, _ = np.intersect1d(self._indices, indices, return_indices=True)
-            self._indices_mask[index_intersect] = False
 
     def _set_weight(self, weight, i):
         i = np.asarray(i).reshape(1)
@@ -146,10 +158,12 @@ class PrioritizedReplayBuffer(Replay):
         self._max = max(np.max(weights), self._max)
 
     def update_weights(self, weights):
+        self.lock.acquire()
         if self._indices_mask.sum() > 0:
             self._set_weights(weights[self._indices_mask], self._indices[self._indices_mask])
         self._indices = None
         self._indices_mask = None
+        self.lock.release()
 
     def update_max(self):
         self._max = np.max(self.weights[self._wi:])

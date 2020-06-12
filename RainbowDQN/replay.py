@@ -1,4 +1,5 @@
 from math import log2
+from typing import Union
 
 import RainbowDQN as src
 
@@ -21,7 +22,7 @@ class PrioritizedReplayBuffer:
         self._rewards = torch.zeros(self.capacity, device=config.device)
         self._actions = torch.zeros(self.capacity, dtype=torch.long, device=config.device)
         self._not_dones = torch.zeros(self.capacity, dtype=torch.bool, device=config.device)
-        self._next_states = torch.zeros(self.capacity, config.action_dim, device=config.device)
+        self._next_states = torch.zeros(self.capacity, config.state_dim, device=config.device)
 
         self.weights = torch.zeros(self.capacity * 2 - 1)
         self._wi = self.capacity - 1
@@ -42,7 +43,6 @@ class PrioritizedReplayBuffer:
     def get_size(self):
         return self.capacity if self._full else self._pos
 
-    @torch.jit.script
     def add(self, state, action, reward, not_done, next_state):
         self._states[self._pos] = state.to(self.config.device)
         self._actions[self._pos] = action
@@ -56,13 +56,11 @@ class PrioritizedReplayBuffer:
             self._full = True
             self._pos = 0
 
-    @torch.jit.script
     def _set_weight(self, weight, i):
         i = torch.tensor([i])
         weight = torch.tensor(weight)
         self._set_weights(weight, i)
 
-    @torch.jit.script
     def _set_weights(self, weights: Union[Tensor, float], i: Tensor):
         
         ######################################
@@ -70,7 +68,7 @@ class PrioritizedReplayBuffer:
         
         _, argi = torch.unique(i, return_inverse=True)
         i = i[argi]
-        if type(weights) == Tensor:
+        if len(weights.shape) > 0:
             weights = weights[argi]
 
         ###### Done removing duplicate entries ######
@@ -83,17 +81,16 @@ class PrioritizedReplayBuffer:
         w_update_i = torch.empty((n, self._depth + 1), dtype=torch.long)
         w_update_i[:, 0] = wi
         for d in range(1, self._depth + 1):
-            w_update_i[:, d] = (w_update_i[:, d-1] - 1) / 2
+            w_update_i[:, d] = (w_update_i[:, d-1] - 1) // 2
         
         for j in range(n):
             self.weights[w_update_i[j]] += dw[j]
-        self._max = max(torch.max(weights), self._max)
+        self._max = max(torch.max(weights).item(), self._max)
 
     def update_weights(self, weights):
         self._set_weights(weights, self._indices)
         self._indices = None
 
-    @torch.jit.script
     def update_max(self):
         weights = self.weights[self._wi:]
         non_max = weights[weights < self._max]
@@ -101,7 +98,7 @@ class PrioritizedReplayBuffer:
         if non_max.shape[0] == 0:
             return
 
-        new_max = non_max.max()
+        new_max = non_max.max().item()
         if new_max == 0:
             return
         self._max = new_max
@@ -113,7 +110,6 @@ class PrioritizedReplayBuffer:
         
         self._set_weights(self._max, update_indices)
 
-    @torch.jit.script
     def sample(self, n: int):
         if self._indices is not None:
             raise ValueError("Must update weights of last sampled batch before moving on!")
@@ -121,7 +117,7 @@ class PrioritizedReplayBuffer:
         #################################################
         #### Sample in bins for more stable sampling ####
 
-        bin_starts = torch.linspace(0, self.weights[0], steps=n+1)[:-1]     # Exclude endpoint
+        bin_starts = torch.linspace(0, self.weights[0].item(), steps=n+1)[:-1]     # Exclude endpoint
         bin_spacing = bin_starts[1] - bin_starts[0]
         random_samples = torch.rand(n) * bin_spacing
         w = random_samples + bin_starts
@@ -139,8 +135,7 @@ class PrioritizedReplayBuffer:
             self.weights[self._indices + self._wi] / self.weights[0]
         )
 
-    @torch.jit.script
-    def retrieve_indices(self, w: np.ndarray, w_inplace=True):
+    def retrieve_indices(self, w: Tensor, w_inplace=True):
         if not w_inplace:
             w = w.clone()
         

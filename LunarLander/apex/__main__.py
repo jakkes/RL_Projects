@@ -1,112 +1,84 @@
+import os
+import json
+import asyncio
 from random import random, randrange
 from typing import List
 from time import sleep
+from threading import Thread
 
+import ray
 import gym
-
 import numpy as np
+
 import torch
 from torch import nn, optim, Tensor
-from torch.multiprocessing import Process, Queue, SimpleQueue
-# torch.multiprocessing.set_sharing_strategy('file_system')
 
 from replay import PrioritizedReplayBuffer
 
 
-BATCH_SIZE = 128
+BATCH_SIZE = 256
 DISCOUNT = 0.99
-TRAINING_START = 1000
+TRAINING_START = 10000
 STEP_LIMIT = 500
 STEPS = 2
 ALPHA = 0.6
-BETA = 0.5
+BETA = 0.0
 TARGET_UPDATE_FREQ = 10
 LR = 1e-4
-REPLAY_SIZE = int(2**15)
-POLICY_UPDATE_FREQ = 20
+REPLAY_SIZE = int(2**17)
+POLICY_UPDATE_FREQ = 50
 N = 8
 
 
-class QNet(nn.Module):
+QNet = lambda: nn.Sequential(
+    nn.Linear(8, 128), nn.ReLU(inplace=True), nn.Linear(128, 64), nn.ReLU(inplace=True), nn.Linear(64, 32), nn.ReLU(inplace=True), nn.Linear(32, 4)
+)
+
+
+@ray.remote(num_cpus=2)
+class Replay:
     def __init__(self):
-        super().__init__()
-        self.v = nn.Sequential(
-            nn.Linear(8, 128), nn.ReLU(inplace=True),
-            nn.Linear(128, 1)
-        )
+        self.replay: PrioritizedReplayBuffer = PrioritizedReplayBuffer(REPLAY_SIZE)
 
-        self.a = nn.Sequential(
-            nn.Linear(8, 128), nn.ReLU(inplace=True),
-            nn.Linear(128, 64), nn.ReLU(inplace=True),
-            nn.Linear(64, 4)
-        )
+    def sample(self):
+        return self.replay.sample(BATCH_SIZE)
 
-    def forward(self, x):
-        return self.v(x) + self.a(x) - self.a(x).mean(dim=1, keepdim=True)
+    def update_weights(self, weights):
+        self.replay.update_weights(weights)
 
+    def add_sample(self, sample, weight):
+        self.replay.add(sample, weight)
 
-class Replay(Process):
-    def __init__(self, l2r: SimpleQueue, r2l: SimpleQueue, sampleQueue: Queue):
-        super().__init__(daemon=True)
+    def add_multiple(self, samples, weights):
+        self.replay.add_multiple(samples, weights)
 
-        self.l2r: SimpleQueue = l2r
-        self.r2l: SimpleQueue = r2l
-        self.sq: Queue = sampleQueue
-        self.replay: PrioritizedReplayBuffer = None
-
-    def run(self):
-        did_start_feeding = False
-        self.replay = PrioritizedReplayBuffer(REPLAY_SIZE)
-
-        while True:
-            
-            if not did_start_feeding and self.replay.get_size() > TRAINING_START:
-                did_start_feeding = True
-                self.r2l.put(self.replay.sample(BATCH_SIZE))
-
-            if not self.l2r.empty() and did_start_feeding:
-                self.replay.update_weights(self.l2r.get())
-                self.r2l.put(self.replay.sample(BATCH_SIZE))
-
-            samples = []
-            weights = []
-            while not self.sq.empty() and len(samples) < 100:
-                sample, weight = self.sq.get()
-                samples.append(sample)
-                weights.append(weight)
-
-            if len(samples) > 0:
-                self.replay.add_multiple(np.array(samples, dtype=object), np.array(weights))
+    def get_size(self):
+        return self.replay.get_size()
 
 
-class Worker(Process):
-    def __init__(self, sampleQueue: Queue, policyQueue: Queue, epsilon: float):
-        super().__init__(daemon=True)
-
+@ray.remote
+class Worker:
+    def __init__(self, replay: Replay, epsilon: float, render=False):
+        
         print(epsilon)
 
         self.epsilon = epsilon
-        self.sampleQueue: Queue = sampleQueue
-        self.policyQueue: Queue = policyQueue
-        self.render = False
+        self.replay = replay
 
-        self.Q: nn.Module = None
-        self.env: gym.Env = None
-
-    def run(self):
-        self.Q = QNet()
+        self.Q: nn.Module = QNet()
         self.Q.requires_grad_(False)
-        self.Q.load_state_dict(self.policyQueue.get())
+        self.env: gym.Env = gym.make("LunarLander-v2")
 
-        self.env = gym.make("LunarLander-v2")
+        self.render = render
+
+    def update_policy(self, state_dict):
+        self.Q.load_state_dict(state_dict)
+
+    async def run(self):
+
+        send_task = None
 
         while True:
-
-            new_policy = None
-            while not self.policyQueue.empty():
-                new_policy = self.policyQueue.get()
-            if new_policy is not None:
-                self.Q.load_state_dict(new_policy)
 
             state = torch.as_tensor(self.env.reset()).unsqueeze_(0)
             Q: Tensor = self.Q(state).squeeze_(0)
@@ -114,7 +86,10 @@ class Worker(Process):
 
             steps = 0
             tot_reward = 0
+            samples = []
+            weights = []
             while not done:
+                await asyncio.sleep(0.005)
                 steps += 1
 
                 if random() < self.epsilon:
@@ -139,42 +114,46 @@ class Worker(Process):
                 weight = reward + DISCOUNT * nextQ.max() - Q[action] if not done else reward - Q[action]
                 weight.abs_().pow_(ALPHA)
 
-                self.sampleQueue.put((
-                    (state, action, reward, done, next_state),
-                    weight.item()
-                ))
+                samples.append((state, action, reward, done, next_state))
+                weights.append(weight.item())
 
                 Q = nextQ
                 state = next_state
 
-                if self.render:
-                    self.env.render()
+                # if self.render:
+                #     self.env.render()
+            
+            
+            if send_task is not None:
+                await send_task
+            send_task = self.replay.add_multiple.remote(
+                np.array(samples, dtype=object),
+                np.array(weights)
+            )
+
             if self.render:
                 print(tot_reward)
 
 
-class Learner(Process):
-    def __init__(self, r2l: SimpleQueue, l2r: SimpleQueue, policyQueues: List[Queue]):
-        super().__init__(daemon=True)
+@ray.remote(num_cpus=4)
+class Learner:
+    def __init__(self, replay: Replay, workers: List[Worker]):
+        
+        self.replay: Replay = replay
+        self.workers: List[Worker] = workers
 
-        self.policyQueues: List[Queue] = policyQueues
-        self.r2l: SimpleQueue = r2l
-        self.l2r: SimpleQueue = l2r
-
-        self.Q: nn.Module = None
-        self.targetQ: nn.Module = None
-
-    def run(self):
-
-        self.Q = QNet()
-        self.targetQ = QNet()
+        self.Q: nn.Module = QNet()
+        self.targetQ: nn.Module = QNet()
         self.targetQ.load_state_dict(self.Q.state_dict())
         self.targetQ.requires_grad_(False)
+        self.opt = optim.Adam(self.Q.parameters(), lr=LR)
 
-        opt = optim.Adam(self.Q.parameters(), lr=LR)
+    async def run(self):
 
-        for q in self.policyQueues:
-            q.put(self.Q.state_dict())
+        while await self.replay.get_size.remote() < TRAINING_START:
+            await asyncio.sleep(1.0)
+
+        print("Starting")
 
         states = torch.empty(BATCH_SIZE, 8)
         next_states = torch.empty(BATCH_SIZE, 8)
@@ -185,6 +164,8 @@ class Learner(Process):
         arange = torch.arange(BATCH_SIZE)
         
         steps = 0
+        update_weight_task = None
+        policy_update_task = None
         while True:
             steps += 1
 
@@ -192,10 +173,14 @@ class Learner(Process):
                 self.targetQ.load_state_dict(self.Q.state_dict())
 
             if steps % POLICY_UPDATE_FREQ == 0:
-                for q in self.policyQueues:
-                    q.put(self.Q.state_dict())
+                if policy_update_task is not None:
+                    await policy_update_task
+                policy_update_task = asyncio.gather(*[worker.update_policy.remote(self.Q.state_dict()) for worker in self.workers])
 
-            samples, prio = self.r2l.get()
+            if update_weight_task is not None:
+                await update_weight_task
+            samples, prio = await self.replay.sample.remote()
+
             w = (1 / REPLAY_SIZE / torch.as_tensor(prio)).pow_(BETA)
             w /= w.max()
             for i in range(BATCH_SIZE):
@@ -214,34 +199,28 @@ class Learner(Process):
             td_error = rewards + not_dones * DISCOUNT * targetQ[arange, next_greedy_actions] - Q[arange, actions]
 
             new_weights = td_error.detach().abs().pow(ALPHA).numpy()
-            self.l2r.put(new_weights)
+
+            update_weight_task = self.replay.update_weights.remote(new_weights)
 
             loss = (w * td_error).pow(2).mean()
 
-            opt.zero_grad()
+            self.opt.zero_grad()
             loss.backward()
-            opt.step()
+            self.opt.step()
 
 
 if __name__ == "__main__":
     
-    l2r = SimpleQueue()
-    r2l = SimpleQueue()
-    sampleQueue = Queue(1000)
+    ray.init()
 
-    replay = Replay(l2r, r2l, sampleQueue)
+    replay = Replay.remote()
 
-    policyQueues = [Queue(10) for _ in range(N)]
-    epsilons = np.linspace(0.4, 0.001, num=N)
-    workers = [Worker(sampleQueue, policyQueues[i], epsilons[i]) for i in range(N)]
-    workers[-1].render = True
+    epsilons = np.power(0.4, 1 + np.arange(N) * 3 / (N-1)) if N > 1 else [0.1]
+    workers = [Worker.remote(replay, epsilon, render=epsilon == epsilons[-1]) for epsilon in epsilons]
+    worker_run_ids = [worker.run.remote() for worker in workers]
 
-    learner = Learner(r2l, l2r, policyQueues)
-
-    replay.start()
-    for worker in workers:
-        worker.start()
-    learner.start()
+    learner = Learner.remote(replay, workers)
+    learner_run_id = learner.run.remote()
 
     while True:
         sleep(1.0)
