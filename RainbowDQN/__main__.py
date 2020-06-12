@@ -8,7 +8,7 @@ from . import RainbowAgent, RainbowConfig
 
 if __name__ == "__main__":
     config = RainbowConfig(
-        state_dim=4, action_dim=2, device="cpu",
+        state_dim=8, action_dim=4, device="cpu",
         n_steps=3,
         replay_capacity=4*8192,
         batchsize=32,
@@ -17,14 +17,14 @@ if __name__ == "__main__":
         discount=0.99,
         target_update_freq=10,
         use_distributional=True,
-        Vmin=0,
+        Vmin=-200,
         Vmax=200,
         no_atoms=51,
         use_double=True,
         use_dueling=True,
-        pre_stream_hidden_layer_sizes=[32],
-        value_stream_hidden_layer_sizes=[32],
-        advantage_stream_hidden_layer_sizes=[32],
+        pre_stream_hidden_layer_sizes=[64],
+        value_stream_hidden_layer_sizes=[64, 32],
+        advantage_stream_hidden_layer_sizes=[64, 32],
         use_noisy=True,
         std_init=0.4,
         use_prioritized_replay=False,
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     agent = RainbowAgent(config)
     rewards = []
 
-    env = gym.make("CartPole-v1")
+    env = gym.make("LunarLander-v2")
 
     for episode in range(10000000):
 
@@ -55,7 +55,8 @@ if __name__ == "__main__":
             else:
                 action = randrange(config.action_dim)
             
-            
+            if episode % 10 == 0:
+                env.render()
             next_state, reward, done, _ = env.step(action)
             tot_reward += reward
             next_state = torch.as_tensor(next_state, dtype=torch.float)
