@@ -1,12 +1,89 @@
 from math import log2
 from typing import Union
+from abc import abstractmethod
 
 import RainbowDQN as src
 
 import torch
 from torch import Tensor
 
-class PrioritizedReplayBuffer:
+class Replay:
+    
+    @abstractmethod
+    def __init__(self, config):
+        pass
+
+    @abstractmethod
+    def get_all(self):
+        pass
+
+    @abstractmethod
+    def get_size(self):
+        pass
+
+    @abstractmethod
+    def sample(self, n):
+        pass
+
+    @abstractmethod
+    def update_weights(self, weights):
+        pass
+
+
+class UniformReplayBuffer(Replay):
+    def __init__(self, config: 'src.RainbowConfig'):
+        self.config = config
+        self.capacity: int = config.replay_capacity
+
+        self._pos = 0
+        self._full = False
+        
+        self._states = torch.zeros(self.capacity, config.state_dim, device=config.device)
+        self._rewards = torch.zeros(self.capacity, device=config.device)
+        self._actions = torch.zeros(self.capacity, dtype=torch.long, device=config.device)
+        self._not_dones = torch.zeros(self.capacity, dtype=torch.bool, device=config.device)
+        self._next_states = torch.zeros(self.capacity, config.state_dim, device=config.device)
+
+    def get_all(self):
+        return (
+            self._states[:self.get_size()],
+            self._actions[:self.get_size()],
+            self._rewards[:self.get_size()],
+            self._not_dones[:self.get_size()],
+            self._next_states[:self.get_size()]
+        )
+
+    def get_size(self):
+        return self.capacity if self._full else self._pos
+
+    def add(self, state, action, reward, not_done, next_state):
+        self._states[self._pos] = state.to(self.config.device)
+        self._actions[self._pos] = action
+        self._rewards[self._pos] = reward
+        self._not_dones[self._pos] = not_done
+        self._next_states[self._pos] = next_state.to(self.config.device)
+
+        self._pos += 1 
+        if self._pos >= self.capacity:
+            self._full = True
+            self._pos = 0
+
+    def update_weights(self, weights):
+        return
+
+    def sample(self, n: int):
+        self._indices = torch.randint(self.get_size(), (n, ))
+        return (
+            self._states[self._indices],
+            self._actions[self._indices],
+            self._rewards[self._indices],
+            self._not_dones[self._indices],
+            self._next_states[self._indices],
+            None
+        )
+
+
+class PrioritizedReplayBuffer(Replay):
     def __init__(self, config: 'src.RainbowConfig'):
 
         self.config = config
@@ -66,6 +143,7 @@ class PrioritizedReplayBuffer:
         ######################################
         ###### Remove duplicate entries ######
         
+        weights = torch.as_tensor(weights)
         _, argi = torch.unique(i, return_inverse=True)
         i = i[argi]
         if len(weights.shape) > 0:
@@ -90,8 +168,10 @@ class PrioritizedReplayBuffer:
     def update_weights(self, weights):
         self._set_weights(weights, self._indices)
         self._indices = None
+        if self._pos % 25 == 0:
+            self._update_max()
 
-    def update_max(self):
+    def _update_max(self):
         weights = self.weights[self._wi:]
         non_max = weights[weights < self._max]
         
