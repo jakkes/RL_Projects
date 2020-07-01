@@ -138,6 +138,13 @@ class RainbowAgent:
                 )
                 self._rewards[self._n_step].fill_(0.0)
 
+    def get_qvalues(self, states):
+        if self.config.use_distributional:
+            d = self.Qnet(states)
+            return torch.sum(d * self.z.view(1, 1, -1), dim=2)
+        else:
+            return self.Qnet(states)
+
     def get_actions(self, states) -> Tensor:
         return self._get_actions(states, self.Qnet)
 
