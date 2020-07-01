@@ -27,7 +27,7 @@ if __name__ == "__main__":
         advantage_stream_hidden_layer_sizes=[32],
         use_noisy=True,
         std_init=0.4,
-        use_prioritized_replay=False,
+        use_prioritized_replay=True,
         alpha=0.6,
         beta_start=0.4,
         beta_end=1.0,

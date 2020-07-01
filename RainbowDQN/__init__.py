@@ -17,7 +17,7 @@ class RainbowConfig:
                  replay_capacity: int=None, batchsize: int=None, beta_start: float=None, beta_end: float=None, 
                  beta_t_start: int=None, beta_t_end: int=None, alpha: float=None, target_update_freq: int=None,
                  use_noisy: bool=None, use_double: bool=None, use_prioritized_replay: bool=None, use_dueling: bool=None,
-                 use_distributional: bool=None):
+                 use_distributional: bool=None, gradient_clip: float=-1):
 
         self.use_noisy: bool = use_noisy
         self.use_double: bool = use_double
@@ -52,6 +52,8 @@ class RainbowConfig:
         self.beta_t_start: float = beta_t_start
         self.beta_t_end: float = beta_t_end
         self.alpha: float = alpha
+
+        self.gradient_clip: float = gradient_clip
 
 
 class RainbowAgent:
@@ -216,6 +218,11 @@ class RainbowAgent:
                 loss.mean().backward()
             else:
                 tderror.pow(2).mean().backward()
+        
+        if self.config.gradient_clip > 0:
+            params: Tensor
+            for params in self.Qnet.parameters():
+                params.grad.clamp_(-self.config.gradient_clip, self.config.gradient_clip)
         self.opt.step()
 
         self.train_steps += 1
