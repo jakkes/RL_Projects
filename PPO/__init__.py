@@ -4,6 +4,18 @@ import torch
 from torch import Tensor
 
 @torch.jit.script
+def _loss2(old_values: Tensor, V: Tensor, Vtarget: Tensor, old_probs: Tensor, new_probs: Tensor, epsilon: Tensor):
+    A = Vtarget - V
+    
+    policy_mask = (((new_probs - old_probs) / old_probs).abs_() < epsilon).detach_()
+    value_mask = (((V - old_values) / old_values.abs()).abs_() < epsilon).detach_()
+
+    policy_loss = - torch.where(policy_mask, A.detach() * new_probs.log(), torch.zeros_like(new_probs)).mean()
+    value_loss = torch.where(value_mask, A.pow(2), torch.zeros_like(A)).mean()
+
+    return policy_loss + value_loss
+
+@torch.jit.script
 def _loss(old_values: Tensor, V: Tensor, Vtarget: Tensor, old_probs: Tensor, new_probs: Tensor, epsilon: Tensor):
     A = (Vtarget - V).detach()
     pr = new_probs / old_probs

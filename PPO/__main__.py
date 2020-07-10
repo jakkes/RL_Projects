@@ -5,11 +5,11 @@ from torch import nn, optim, Tensor
 
 from . import PPOAgent, PPOConfig
 
-ACTORS = 8
-TRAIN_STEPS = 8 # per actor
+ACTORS = 16
+TRAIN_STEPS = 64 # per actor
 EPOCHS = 5
 BATCHSIZE = 32
-STEPS = 3   # steps to repeat action
+STEPS = 2   # steps to repeat action
 
 if __name__ == "__main__":
     val_net = lambda: nn.Sequential(
@@ -42,8 +42,8 @@ if __name__ == "__main__":
     tot_rewards = [0.0] * ACTORS
 
     count = 0
+    render_count = 0
     while True:
-
         for i in range(ACTORS):
             if dones[i]:
                 states[i] = torch.as_tensor(envs[i].reset(), dtype=torch.float)
@@ -56,8 +56,10 @@ if __name__ == "__main__":
                     """.format(
                         mean_reward
                     ))
+                    render_count += 1
 
-        envs[0].render()
+        if render_count % 10 == 0:
+            envs[0].render()
         actions = agent.get_actions(states)
         for i in range(ACTORS):
             action = actions[i].item(); state = states[i]
