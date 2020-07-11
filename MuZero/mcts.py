@@ -50,7 +50,7 @@ class Node:
         self._parent.backup(self._parent.R[self._action] + discount * G, discount)
         
 
-def run_mcts(state: Tensor, agent: MuZeroAgent) -> Tensor:
+def get_action_policy(state: Tensor, agent: MuZeroAgent) -> Tensor:
     with torch.no_grad():
         root_state = agent.representation_net(state)
         prior, value = agent.prediction_net(root_state)
@@ -66,7 +66,6 @@ def run_mcts(state: Tensor, agent: MuZeroAgent) -> Tensor:
         node, value = node.expand(action, agent.dynamics_net, agent.prediction_net)
         node.backup(value, agent.config.discount)
 
-class Simulation:
-    def __init__(self, root: Node, representation_net: nn.Module, prediction_net: nn.Module):
-        self.history: List[Node] = [root]
-        self.node: Node = root
+    root_node.N.pow_(1.0 / agent.config.policy_temperature)
+    return root_node.N / root_node.N.sum()
+
