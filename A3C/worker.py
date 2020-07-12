@@ -23,15 +23,16 @@ class Worker(Process):
             **opt_params
         )
 
-        steps = 0
-        loss = torch.tensor(0.0)
+        logprobs = torch.zeros(batchsize)
+        deltas = torch.zeros(batchsize)
+        i = 0
+
         while True:
             
             done = False
             state = torch.as_tensor(env.reset()).view(1, -1)
 
             while not done:
-                steps += 1
                 action_probabilities: Tensor = actor(state).squeeze()
                 action = torch.sum(action_probabilities.cumsum(0) < torch.rand((1, ))).item()
 
@@ -44,15 +45,16 @@ class Worker(Process):
                     else:
                         td_target = reward + discount * critic(next_state)[0, 0]
 
-                delta = td_target - critic(state)[0, 0]
-                loss += delta.pow(2) - delta.detach() * action_probabilities[action].log()
+                logprobs[i] = action_probabilities[action].log()
+                deltas[i] = td_target - critic(state)[0, 0]
 
-                if steps >= batchsize:
-                    loss /= batchsize
+                i += 1
+                if i >= batchsize:
                     opt.zero_grad()
-                    loss.backward()
+                    (deltas.pow(2).div_(2) - deltas.detach() * logprobs).mean().backward()
                     opt.step()
-                    loss = 0
-                    steps = 0
+                    logprobs = torch.zeros_like(logprobs)
+                    deltas = torch.zeros_like(deltas)
+                    i = 0
 
                 state = next_state
