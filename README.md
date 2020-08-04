@@ -1,7 +1,4 @@
-# Reinforcement Learning
-A collection of environments and applications of different Reinforcement learning algorithms to these environments. Some environments are part of the OpenAI Gym package, while some are self made.
+# Reinforcement Learning agents
+A collection of reinforcement learning (RL) algorithms and environments.
 
-## Project structure
-Each environment is self contained, with their own requirements file and their own README file. However, they are all implemented in Python and use PyTorch for the training of neural networks.
-
-Within each environment folder, there are a number of modules containing different applications. To run a module, run `python3 -m MODULE_NAME`.
+For example implementation on the LunarLander environment, see the `__main__.py` file of each algorithm directory.

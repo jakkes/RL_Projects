@@ -1,1 +1,0 @@
-from snake.game import Snake
