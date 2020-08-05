@@ -1,71 +1,109 @@
 from typing import Dict, List, Tuple
-
+import numpy as np
 import torch
 from torch import nn, Tensor, LongTensor, Size
 
-from . import MuZeroAgent, MuZeroConfig
+import MuZero as src
 
-class Node:
-    def __init__(self, state: Tensor, prior: Tensor, _action: int=None, _parent: Node=None):
-        self._action: int = _action
-        self._state: Tensor = state
-        self._parent: Node = _parent
+@torch.jit.script
+def _update_normalization(values, minmaxdata):
+    mi = values.min()
+    ma = values.max()
 
-        action_dim = prior.shape[-1]
-
-        self.P: Tensor = prior
-        self.Q: Tensor = torch.zeros(action_dim)
-        self.N: LongTensor = torch.zeros(action_dim, dtype=torch.long)
-        self.S: Tensor = torch.empty((action_dim, ) + state.shape)
-        self.R: Tensor = torch.zeros(action_dim)
-        self.children: List[Node] = [None] * action_dim
+    if mi < minmaxdata[0]:
+        minmaxdata[0] = mi
     
-    def expanded(self, action: int):
-        return self.children[action] is not None
+    if ma > minmaxdata[1]:
+        minmaxdata[1] = ma
 
-    def expand(self, action: int, dynamics_net: nn.Module, prediction_net: nn.Module) -> Tuple[Node, float]:
-        with torch.no_grad():
-            state, reward = dynamics_net(self._state, action)
-            prior, value = prediction_net(state)
-        self.R[action] = reward; self.S[action] = state
-        self.children[action] = Node(state, prior, _action=action, _parent=self)
-        return self.children[action], value
+@torch.jit.script
+def _normalize_Q(Q, minmaxdata):
+    if minmaxdata[1] < minmaxdata[0]:
+        return Q
+    return ((Q - minmaxdata[0]) / (minmaxdata[1] - minmaxdata[0])).clamp_(0, 1)
 
-    def select_action(self, c1, c2) -> LongTensor:
-        coeff = (((self.N.sum() + c2 + 1) / c2).log_() + c1) * self.N.sum().sqrt_()
-        return torch.argmax(
-            self.Q + self.P / (1 + self.N) * coeff
-        )
+@torch.jit.script
+def _select(nodes, P, Q, N, mask, children, minmax, c1: float, c2: float):
+    nodes = nodes[mask]
+    children = children[mask, nodes]
+    bv = torch.arange(mask.sum())
+    bvr = bv.repeat_interleave(children.shape[-1])
+    P = P[mask]; Q = Q[mask]; N = N[mask]
+    P = P[bvr, children.view(-1)].view(children.shape)
+    Q = _normalize_Q(Q[bvr, children.view(-1)].view(children.shape), minmax)
+    N = N[bvr, children.view(-1)].view(children.shape)
 
-    def get_child(self, action: int) -> Node:
-        return self.children[action]
+    coeff = (((N.sum(1, keepdim=True) + c2 + 1) / c2).log_() + c1) * N.sum(1, keepdim=True).sqrt_()
+    actions = (Q + P / (1 + N) * coeff).argmax(1)
+    return actions, children[bv, actions]
 
-    def backup(self, G: float, discount: float):
-        if self._parent is None:
-            return
+@torch.jit.script
+def _backup(nodes, values, Q, N, R, parents, discount, bv, bvr, minmax):
+    G = values.clone()
 
-        self._parent.Q[self._action] = (self._parent.N[self._action] * self._parent.Q[self._action] + G) / (self._parent.N[self._action] + 1)
-        self._parent.N[self._action] += 1
+    while True:
+        mask = parents[bv, nodes] > -1
+        if mask.sum() == 0:
+            break
+        G[mask] = R[mask, nodes[mask]] + discount * G[mask]
+        N[mask, nodes[mask]] += 1
+        Q[mask, nodes[mask]] += 1.0 / N[mask, nodes[mask]] * (G[mask] - Q[mask, nodes[mask]])
+        nodes[mask] = parents[mask, nodes[mask]]
+        _update_normalization(G[mask], minmax)
 
-        self._parent.backup(self._parent.R[self._action] + discount * G, discount)
-        
+def _get_children_indices(simulation: int, action_dim: int) -> LongTensor:
+    return (1 + simulation * action_dim) + torch.arange(action_dim)
 
-def get_action_policy(state: Tensor, agent: MuZeroAgent) -> Tensor:
-    with torch.no_grad():
-        root_state = agent.representation_net(state)
-        prior, value = agent.prediction_net(root_state)
-    root_node = Node(root_state, prior)
+def run_mcts(states: Tensor, simulations: int, agent: 'src.agent.MuZeroAgent'):
+    minmax = torch.tensor([np.inf, -np.inf])
 
-    for _ in range(agent.config.simulations):
-        node = root_node
-        action = node.select_action(agent.config.c1, agent.config.c2).item()
-        
-        while node.expanded(action):
-            node = node.get_child(action)
+    root_states = agent.representation_net(states)
+    priors, values = agent.prediction_net(root_states)
 
-        node, value = node.expand(action, agent.dynamics_net, agent.prediction_net)
-        node.backup(value, agent.config.discount)
+    bn = states.shape[0]        # batch number
+    action_dim = priors.shape[-1]
+    
+    bv = torch.arange(bn)       # batch vec 
+    bvr = bv.repeat_interleave(action_dim)      # batch vec repeated
 
-    root_node.N.pow_(1.0 / agent.config.policy_temperature)
-    return root_node.N / root_node.N.sum()
+    P = torch.zeros(bn, 1 + (simulations + 1) * action_dim)
+    Q = torch.zeros(bn, 1 + simulations * action_dim)
+    N = Q.clone(); R = N.clone()
+    states = torch.zeros(Q.shape + root_states.shape[1:])
+    children = torch.empty(bn, 1 + simulations * action_dim, action_dim, dtype=torch.long).fill_(-1)
+    parents = torch.empty(bn, 1 + (simulations + 1) * action_dim, dtype=torch.long).fill_(-1)
+    
+    states[:, 0] = root_states
+    P[:, 1:action_dim+1] = priors
+    ci = _get_children_indices(0, action_dim)
+    children[:, 0] = ci.view(1, -1).repeat(bn, 1)
+    parents[:, ci] = 0
 
+    for s in range(simulations):
+        nodes = torch.zeros(bn, dtype=torch.long)
+        actions = torch.zeros_like(nodes)
+        while True:
+            mask = children[bv, nodes, 0] > -1
+            if mask.sum() == 0:
+                break
+
+            selected_actions, selected_children = _select(nodes, P, Q, N, mask, children, minmax, agent.config.c1, agent.config.c2)
+            nodes[mask] = selected_children
+            actions[mask] = selected_actions
+
+        ci = _get_children_indices(s+1, action_dim)     # child indices
+        cir = ci.repeat(bn)
+        children[bv, nodes] = cir.view(nodes.shape[0], -1) #ci.view(1, -1).repeat(bn, 1)
+        parents[bvr, cir] = nodes.repeat_interleave(action_dim)
+
+        new_states, rewards = agent.dynamics_net(states[bv, parents[bv, nodes]], actions)
+        states[bv, nodes] = new_states
+        R[bv, nodes] = rewards.squeeze()
+
+        priors, values = agent.prediction_net(states[bv, nodes])
+        P[bvr, cir] = priors.view(-1)
+        values = values.view(-1)
+
+        _backup(nodes, values, Q, N, R, parents, agent.config.discount, bv, bvr, minmax)
+
+    return P, Q, N

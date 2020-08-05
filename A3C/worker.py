@@ -1,7 +1,8 @@
 import torch
 from torch.multiprocessing import Process, Queue
+from torch import Tensor
 
-from .utils import repeat_action
+from utils.env import repeat_action
 
 class Worker(Process):
     def __init__(self, conn: Queue):

@@ -7,7 +7,7 @@ from torch import optim, nn, Tensor
 import matplotlib.pyplot as plt
 
 from . import A3Cagent, A3Cconfig
-from .utils import repeat_action
+from utils.env import repeat_action
 
 if __name__ == "__main__":
     env_gen = lambda: gym.make("LunarLander-v2")
