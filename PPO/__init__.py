@@ -5,17 +5,33 @@ from torch import Tensor, nn
 
 
 
-@torch.jit.script
-def _loss(V: Tensor, Vtarget: Tensor, old_probs: Tensor, new_probs: Tensor, epsilon: Tensor):
-    A = (Vtarget - V).detach()
+# @torch.jit.script
+def _policy_loss(A: Tensor, old_probs: Tensor, new_probs: Tensor, epsilon: Tensor):
     pr = new_probs / old_probs
     clipped = pr.clamp(1-epsilon.item(), 1+epsilon.item())
     pr = pr * A; clipped = clipped * A
-    policy_loss = -torch.min(clipped, pr).mean()
+    return -torch.min(clipped, pr).mean()
 
-    value_loss = (Vtarget - V).pow_(2).div_(2).mean()
 
-    return policy_loss + value_loss
+# @torch.jit.script
+def _compute_deltas(rewards, V, not_dones, discount):
+    deltas = torch.empty(V.shape[0], V.shape[1] - 1)
+    for k in reversed(range(deltas.shape[1])):
+        deltas[:, k] = rewards[:, k] + discount * not_dones[:, k] * V[:, k+1].detach() - V[:, k]
+    return deltas
+
+
+# @torch.jit.script
+def _compute_advantages(deltas, not_dones, discount, gae_discount):
+    
+    d = discount*gae_discount
+    
+    A = torch.empty_like(deltas)
+    A[:, -1] = deltas[:, -1]
+    for k in reversed(range(A.shape[1]-1)):
+        A[:, k] = deltas[:, k] + d * not_dones[:, k] * A[:, k+1]
+    return A
+
 
 class PPOConfig:
     def __init__(self, 
@@ -44,19 +60,6 @@ class PPOAgent:
         self.value_net = config.value_net_gen()
         self.optimizer: torch.optim.Optimizer = config.optimizer(list(self.value_net.parameters()) + list(self.policy_net.parameters()), **config.optimizer_params)
 
-        self._states = None
-        self._actions = None
-        self._rewards = None
-        self._not_dones = None
-        self._next_states = None
-        self._reset_memory()
-
-    def _reset_memory(self):
-        self._states = []
-        self._actions = []
-        self._rewards = []
-        self._not_dones = []
-        self._next_states = []
 
     def get_actions(self, states: torch.Tensor):
         with torch.no_grad():
@@ -65,46 +68,25 @@ class PPOAgent:
         actions = (r > action_distributions.cumsum(1)).sum(1)
         return actions
 
-    def observe(self, states: Tensor, actions: Tensor, rewards: Tensor, not_dones: Tensor, next_states: Tensor):
-        self._states.append(states)
-        self._actions.append(actions)
-        self._rewards.append(rewards)
-        self._not_dones.append(not_dones)
-        self._next_states.append(next_states)
 
-    def train_step(self, epochs, batchsize):
-        states = torch.stack(self._states)
-        actions = torch.stack(self._actions)
-        rewards = torch.stack(self._rewards)
-        not_dones = torch.stack(self._not_dones)
-        next_states = torch.stack(self._next_states)
-        self._reset_memory()
+    def train_step(self, states, actions, rewards, not_dones, epochs):
         
         n = states.shape[0]     # number of actors
-        b = states.shape[1]     # step size per actor
-        nbvec = torch.arange(n*b)
+        b = states.shape[1]     # steps per actor
+        nbvec = torch.arange(n*(b-1))
         state_shape = states.shape[2:]
         
         with torch.no_grad():
-            old_probs = self.policy_net(states.view(-1, *state_shape))[nbvec, actions].view(n, b, *state_shape)
+            old_probs = self.policy_net(states[:, :-1].reshape(-1, *state_shape))[nbvec, actions.view(-1)].view(n, b-1)
         
-        advantages = torch.zeros(n, b)
-        
-        for i in reversed(range(b)):
-            G = rewards[:, i] + self.config.discount * not_dones[:, i] * G
-
         for _ in range(epochs):
-            indices = torch.randperm(n)
-            for b in range(0, n, batchsize):
-                batch = indices[b:b+batchsize]
-                new_probs = self.policy_net(states[batch])[torch.arange(batch.shape[0]), actions[batch]]
-                with torch.no_grad():
-                    Vtarget = rewards[batch] + self.config.discount * not_dones[batch] * self.value_net(next_states[batch]).view(-1)
-                V = self.value_net(states[batch]).view(-1)
+            V = self.value_net(states.view(-1, *state_shape)).view(n, b)
+            d = _compute_deltas(rewards, V, not_dones, self.config.discount)
+            A = _compute_advantages(d.detach(), not_dones, self.config.discount, self.config.gae_discount)
+            
+            new_probs = self.policy_net(states[:, :-1].reshape(-1, *state_shape))[nbvec, actions.view(-1)].view(n, b-1)
 
-                # loss = _loss(old_values[batch], V, Vtarget, old_probs[batch], new_probs, self.config.epsilon)
-                loss = _loss(V, Vtarget, old_probs[batch], new_probs, self.config.epsilon)
-                self.optimizer.zero_grad()
-                loss.backward()
-                nn.utils.clip_grad_norm_(self.policy_net.parameters(), 5); nn.utils.clip_grad_norm_(self.value_net.parameters(), 5)
-                self.optimizer.step()
+            loss = _policy_loss(A, old_probs, new_probs, self.config.epsilon) + d.pow(2).div_(2.0).mean()
+            self.optimizer.zero_grad()
+            loss.backward()
+            self.optimizer.step()

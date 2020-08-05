@@ -3,12 +3,13 @@ import gym
 import torch
 from torch import nn, optim, Tensor
 
+from utils.env import ParallelEnv
+
 from . import PPOAgent, PPOConfig
 
 ACTORS = 8
-TRAIN_STEPS = 8 # per actor
-EPOCHS = 5
-BATCHSIZE = 32
+TRAIN_STEPS = 16 # per actor
+EPOCHS = 10
 STEPS = 1   # steps to repeat action
 
 if __name__ == "__main__":
@@ -30,54 +31,53 @@ if __name__ == "__main__":
         value_net_gen=val_net,
         optimizer=optim.Adam,
         optimizer_params={'lr': 1e-4},
-        discount=0.99
+        discount=0.99,
+        gae_discount=0.95
     )
 
     agent = PPOAgent(config)
-
+    
+    ###############
+    ## For stats ##
     mean_reward = 0.0
     start_value = 0.0
-    envs = [gym.make("CartPole-v0") for _ in range(ACTORS)]
-    dones = [False] * ACTORS
-    states = torch.stack([torch.as_tensor(env.reset(), dtype=torch.float) for env in envs])
     tot_rewards = [0.0] * ACTORS
+    ## For stats ##
+    ###############
 
-    count = 0
-    render_count = 0
+    env_gen_fn = lambda: gym.make("CartPole-v0")
+    env = ParallelEnv(env_gen_fn, ACTORS, no_repeats=STEPS)
+    start_states = env.reset()
+    state_shape = start_states.shape[1:]
+
+    states = torch.empty(ACTORS, TRAIN_STEPS+1, *state_shape)
+    actions = torch.empty(ACTORS, TRAIN_STEPS, dtype=torch.long)
+    rewards = torch.empty(ACTORS, TRAIN_STEPS)
+    not_dones = torch.empty(ACTORS, TRAIN_STEPS, dtype=torch.bool)
+    states[:, -1] = start_states
+
+    mean_reward = 0.0
+    total_rewards = torch.zeros(ACTORS)
     while True:
-        for i in range(ACTORS):
-            if dones[i]:
-                states[i] = torch.as_tensor(envs[i].reset(), dtype=torch.float)
-                mean_reward += 0.1 * (tot_rewards[i] - mean_reward)
-                start_value += 0.1 * (agent.value_net(states[i].view(1, -1)).item() - start_value)
-                tot_rewards[i] = 0.0
 
-                if i == 0:
-                    print("""
-                    Mean reward - {}
-                    Start value - {}
-                    """.format(
-                        mean_reward, start_value
-                    ))
-                    render_count += 1
+        states[:, 0] = states[:, -1]
+        for k in range(TRAIN_STEPS):
+            
+            with torch.no_grad():
+                actions[:, k] = agent.get_actions(states[:, k])
+            
+            s, r, d, _ = env.step(actions[:, k])
+            states[:, k+1] = s
+            rewards[:, k] = r
+            not_dones[:, k] = ~d
 
-        if render_count % 10 == 0:
-            envs[0].render()
-        actions = agent.get_actions(states)
-        for i in range(ACTORS):
-            action = actions[i].item(); state = states[i]
-            reward = 0.0
-            for _ in range(STEPS):
-                next_state, r, done, _ = envs[i].step(action)
-                reward += r
-                if done:
-                    break
-            next_state = torch.as_tensor(next_state, dtype=torch.float)
-            tot_rewards[i] += reward
-            agent.observe(state, action, reward, not done, next_state)
-            states[i] = next_state
-            dones[i] = done
+            total_rewards += r
 
-        count += 1
-        if count % TRAIN_STEPS  == 0:
-            agent.train_step(EPOCHS, BATCHSIZE)
+            if any(d):
+                states[d, k+1] = env.reset(d)
+                mean_reward += 0.1 * (total_rewards[d].mean().item() - mean_reward)
+                total_rewards[d] = 0.0
+                print(mean_reward)
+            env.envs[0].render()
+
+        agent.train_step(states, actions, rewards, not_dones, EPOCHS)
