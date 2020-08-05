@@ -5,10 +5,10 @@ from torch import nn, optim, Tensor
 
 from . import PPOAgent, PPOConfig
 
-ACTORS = 4
-TRAIN_STEPS = 4 # per actor
+ACTORS = 8
+TRAIN_STEPS = 8 # per actor
 EPOCHS = 5
-BATCHSIZE = 8
+BATCHSIZE = 32
 STEPS = 1   # steps to repeat action
 
 if __name__ == "__main__":
@@ -25,11 +25,11 @@ if __name__ == "__main__":
     )
 
     config = PPOConfig(
-        epsilon=0.2,
+        epsilon=0.1,
         policy_net_gen=pol_net,
         value_net_gen=val_net,
         optimizer=optim.Adam,
-        optimizer_params={'lr': 1e-4, 'eps': 1e-4},
+        optimizer_params={'lr': 1e-4},
         discount=0.99
     )
 
