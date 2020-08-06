@@ -58,7 +58,7 @@ def run_mcts(root_states: Tensor, simulations: int, agent: '.agent.MuZeroAgent')
 
     priors, values = agent.prediction_net(root_states)
 
-    bn = states.shape[0]        # batch number
+    bn = root_states.shape[0]        # batch number
     action_dim = priors.shape[-1]
     
     bv = torch.arange(bn)       # batch vec 

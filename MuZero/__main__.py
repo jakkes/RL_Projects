@@ -49,6 +49,8 @@ if __name__ == "__main__":
         representation_net_gen=RepresentationNet,
         prediction_net_gen=PredictionNet,
         dynamics_net_gen=DynamicsNet,
+        optimizer_class=torch.optim.Adam,
+        optimizer_params={'lr': 1e-4},
         c1=1.25,
         c2=19528,
         simulations=10,
@@ -61,7 +63,7 @@ if __name__ == "__main__":
 
     agent = MuZeroAgent(config)
 
-    for _ in range(100):
+    for _ in range(10000):
         
         states = [torch.as_tensor(env.reset(), dtype=torch.float)]
         actions = []
@@ -78,10 +80,11 @@ if __name__ == "__main__":
             states.append(next_state); actions.append(action); rewards.append(reward)
             
             tot_reward += reward
-            env.render()
+            # env.render()
         
         agent.observe(torch.stack(states), torch.tensor(actions, dtype=torch.long), torch.tensor(rewards))
         if agent.replay.get_size() > 10:
-            agent.train_step(5, 5)
+            for _ in range(5):
+                agent.train_step(5, 5)
 
         print(tot_reward)
