@@ -4,8 +4,7 @@ import torch
 from torch import Tensor, nn
 
 
-
-# @torch.jit.script
+@torch.jit.script
 def _policy_loss(A: Tensor, old_probs: Tensor, new_probs: Tensor, epsilon: Tensor):
     pr = new_probs / old_probs
     clipped = pr.clamp(1-epsilon.item(), 1+epsilon.item())
@@ -13,22 +12,22 @@ def _policy_loss(A: Tensor, old_probs: Tensor, new_probs: Tensor, epsilon: Tenso
     return -torch.min(clipped, pr).mean()
 
 
-# @torch.jit.script
+@torch.jit.script
 def _compute_deltas(rewards, V, not_dones, discount):
     deltas = torch.empty(V.shape[0], V.shape[1] - 1)
-    for k in reversed(range(deltas.shape[1])):
+    for k in torch.arange(deltas.shape[1]-1, -1, -1):
         deltas[:, k] = rewards[:, k] + discount * not_dones[:, k] * V[:, k+1].detach() - V[:, k]
     return deltas
 
 
-# @torch.jit.script
+@torch.jit.script
 def _compute_advantages(deltas, not_dones, discount, gae_discount):
     
     d = discount*gae_discount
     
     A = torch.empty_like(deltas)
     A[:, -1] = deltas[:, -1]
-    for k in reversed(range(A.shape[1]-1)):
+    for k in torch.arange(A.shape[1]-2, -1, -1):
         A[:, k] = deltas[:, k] + d * not_dones[:, k] * A[:, k+1]
     return A
 
