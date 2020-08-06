@@ -6,7 +6,7 @@ import numpy as np
 import gym
 
 from utils.random import choice
-from utils.replay import UniformReplayBuffer
+from utils.replay import UniformSequenceBuffer
 
 import MuZero.mcts as mcts
 
@@ -44,7 +44,7 @@ class MuZeroAgent:
         self.representation_net = config.representation_net_gen()
         self.prediction_net = config.prediction_net_gen()
         self.dynamics_net = config.dynamics_net_gen()
-        self.replay = UniformReplayBuffer(config.state_shape, config.replay_capacity)
+        self.replay = UniformSequenceBuffer(config.replay_capacity, 3)
 
     def _requires_grad(self, val):
         self.representation_net.requires_grad_(val)
@@ -53,39 +53,36 @@ class MuZeroAgent:
 
     def get_actions(self, states: Tensor) -> LongTensor:
         self._requires_grad(False)
+        states = self.representation_net(states)
         _, _, N = mcts.run_mcts(states, self.config.simulations, self)
-        N = N[torch.arange(states.shape[0]), 1:1+self.config.action_dim]
         N = N.pow(1.0 / self.config.policy_temperature)
         policy = N / N.sum(1, keepdim=True)
         return choice(policy)
 
-    def observe(self, state, action, reward, not_done, next_state):
-        self.replay.add(state, action, reward, not_done, next_state)
+    def observe(self, states, actions, rewards):
+        self.replay.add((states, actions, rewards))
 
-    def train_step(self, batchsize: int):
+    def train_step(self, batchsize: int, unroll_steps: int):
         if batchsize > self.replay.get_size():
             raise ValueError(f"Cannot sample {batchsize} samples from buffer of size {self.replay.get_size()}")
 
+        sequences, _ = self.replay.sample(batchsize)
+        state_shape = sequences[0, 0].shape[1:]
+
+        states = torch.zeros(batchsize, *state_shape)
+        actions = torch.zeros(batchsize, unroll_steps, dtype=torch.long)
+        rewards = torch.zeros(batchsize, unroll_steps)
+
+        for i in range(batchsize):
+            l = sequences[i, 1].shape[0]
+            j = np.random.randint(l)
+            states[i] = sequences[i, 0][j]
+            actions[i, :min(unroll_steps, l-j)] = sequences[i, 1][j:j+unroll_steps]
+            rewards[i, :min(unroll_steps, l-j)] = sequences[i, 2][j:j+unroll_steps]
+
         self._requires_grad(True)
+        root_states = self.representation_net(states)
+        self._requires_grad(False)
+        P, Q, N = mcts.run_mcts(root_states, self.config.simulations, self)
 
-        states, actions, rewards, not_dones, next_states, _ = self.replay.sample(batchsize)
-        hidden_states = self.representation_net(states)
-        with torch.no_grad():
-            next_hidden_states = self.representation_net(next_states)
-        next_hidden_states[~not_dones] = hidden_states[~not_dones].detach()
-
-        predicted_priors, predicted_values = self.prediction_net(hidden_states)
-        with torch.no_grad():
-            _, next_values = self.prediction_net(next_hidden_states)
-
-        predicted_next_hidden_states, predicted_rewards = self.dynamics_net(hidden_states, actions)
-        
-        policies = torch.zeros_like(predicted_priors)
-        target_values = torch.zeros_like(predicted_values)
-        for i, h in enumerate(hidden_states):
-            node = mcts.run_mcts(h, self)
-            policies[i] = self.get_policy(node)
-            values[i] = rewards[i] + not_dones[i] * self.config.discount * node.Q[actions[i]]
-
-        reward_loss = (predicted_rewards - rewards).pow_(2).mean()
-        policy_loss = (policies * predicted_priors.log_()).sum(dim=1).mean()
+        self._requires_grad(True)

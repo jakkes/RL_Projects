@@ -3,8 +3,6 @@ import numpy as np
 import torch
 from torch import nn, Tensor, LongTensor, Size
 
-import MuZero as src
-
 @torch.jit.script
 def _update_normalization(values, minmaxdata):
     mi = values.min()
@@ -54,10 +52,10 @@ def _backup(nodes, values, Q, N, R, parents, discount, bv, bvr, minmax):
 def _get_children_indices(simulation: int, action_dim: int) -> LongTensor:
     return (1 + simulation * action_dim) + torch.arange(action_dim)
 
-def run_mcts(states: Tensor, simulations: int, agent: 'src.agent.MuZeroAgent'):
+def run_mcts(root_states: Tensor, simulations: int, agent: '.agent.MuZeroAgent'):
+
     minmax = torch.tensor([np.inf, -np.inf])
 
-    root_states = agent.representation_net(states)
     priors, values = agent.prediction_net(root_states)
 
     bn = states.shape[0]        # batch number
@@ -106,4 +104,4 @@ def run_mcts(states: Tensor, simulations: int, agent: 'src.agent.MuZeroAgent'):
 
         _backup(nodes, values, Q, N, R, parents, agent.config.discount, bv, bvr, minmax)
 
-    return P, Q, N
+    return P[:, 1:1+action_dim], Q[:, 1:1+action_dim], N[:, 1:1+action_dim]

@@ -6,11 +6,7 @@ from . import MuZeroAgent, MuZeroConfig
 
 from utils.env import repeat_action
 
-RepresentationNet = lambda: nn.Sequential(
-    nn.Linear(4, 32), nn.ReLU(inplace=True),
-    nn.Linear(32, 16), nn.ReLU(inplace=True),
-    nn.Linear(16, 4)
-)
+RepresentationNet = lambda: nn.Sequential()     # Identity mapping
 
 class PredictionNet(nn.Module):
     def __init__(self):
@@ -67,18 +63,25 @@ if __name__ == "__main__":
 
     for _ in range(100):
         
-        state = env.reset()
-        state = torch.as_tensor(state, dtype=torch.float)
+        states = [torch.as_tensor(env.reset(), dtype=torch.float)]
+        actions = []
+        rewards = []
+        
         done = False
         tot_reward = 0
         while not done:
 
-            action = agent.get_actions(state.unsqueeze(0)).item()
+            action = int(agent.get_actions(states[-1].unsqueeze(0)))
             next_state, reward, done, _ = repeat_action(env, action, 2)
             next_state = torch.as_tensor(next_state, dtype=torch.float)
+            
+            states.append(next_state); actions.append(action); rewards.append(reward)
+            
             tot_reward += reward
             env.render()
-
-            state = next_state
         
+        agent.observe(torch.stack(states), torch.tensor(actions, dtype=torch.long), torch.tensor(rewards))
+        if agent.replay.get_size() > 10:
+            agent.train_step(5, 5)
+
         print(tot_reward)

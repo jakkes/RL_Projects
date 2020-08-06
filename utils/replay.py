@@ -5,6 +5,8 @@ from abc import abstractmethod
 import torch
 from torch import Tensor, Size
 
+import numpy as np
+
 class Replay:
 
     @abstractmethod
@@ -73,5 +75,30 @@ class UniformReplayBuffer(Replay):
             self._rewards[self._indices],
             self._not_dones[self._indices],
             self._next_states[self._indices],
-            torch.tensor([1.0 / self.get_size()]).expand()
+            torch.tensor([1.0 / self.get_size()]).expand(self._indices.shape[0])
         )
+
+
+class UniformSequenceBuffer(Replay):
+    def __init__(self, capacity: int, subsequences: int):
+        self._data = np.empty((capacity, subsequences), dtype=object)
+        self._pos = 0
+        self._filled = False
+        self._capacity = capacity
+
+    def get_all(self):
+        return self._data[:self.get_size()]
+
+    def get_size(self):
+        return self._capacity if self._filled else self._pos
+
+    def sample(self, n):
+        indices = np.random.randint(self.get_size(), size=n)
+        return self._data[indices], 1.0 / self.get_size() * np.ones_like(indices)
+
+    def add(self, sequence):
+        self._data[self._pos, :] = sequence
+        self._pos += 1
+        if self._pos >= self._capacity:
+            self._pos = 0
+            self._filled = True
