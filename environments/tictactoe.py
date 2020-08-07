@@ -7,8 +7,8 @@ import torch
 @torch.jit.script
 def _check_winning_position(board: torch.Tensor):
     
-    tv = torch.arange(3)                # triple vector
-    rtv = torch.arange(2, -1, -1)       # reversed triple vector
+    t = torch.arange(3)                # triple vector
+    r = reversed(t)       # reversed triple vector
 
     dims = len(board.shape)
     for i in range(dims):
@@ -16,8 +16,8 @@ def _check_winning_position(board: torch.Tensor):
             return True
 
     for i in range(dims):
-        for j in range(dims):
-            other_dims = 
+        for j in range(i+1, dims):
+            board[:, ]
 
 
 class TicTacToe(Env):
