@@ -63,7 +63,7 @@ if __name__ == "__main__":
 
     agent = MuZeroAgent(config)
 
-    for _ in range(10000):
+    while True:
         
         states = [torch.as_tensor(env.reset(), dtype=torch.float)]
         actions = []
@@ -80,11 +80,11 @@ if __name__ == "__main__":
             states.append(next_state); actions.append(action); rewards.append(reward)
             
             tot_reward += reward
-            # env.render()
+            env.render()
         
         agent.observe(torch.stack(states), torch.tensor(actions, dtype=torch.long), torch.tensor(rewards))
-        if agent.replay.get_size() > 10:
+        if agent.replay.get_size() > 100:
             for _ in range(5):
-                agent.train_step(5, 5)
+                agent.train_step(32, 5)
 
         print(tot_reward)

@@ -118,7 +118,7 @@ class MuZeroAgent:
         mcts_value = (Q.view(batchsize, unroll_steps+1, -1) * mcts_policy).sum(-1)
 
         ploss = - (mcts_policy * priors.log()).sum(-1).mean()
-        rloss = (rewards - true_rewards).pow(2).mean()
+        rloss = (rewards.squeeze_() - true_rewards).pow(2).mean()
         vloss = (values - mcts_value).pow(2).mean()
         loss = ploss + rloss + vloss
 
