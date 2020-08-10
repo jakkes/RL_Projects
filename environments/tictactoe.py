@@ -22,6 +22,9 @@ def _check_winning_position(board: torch.Tensor):
 
 class TicTacToe(Env):
     def __init__(self, dim: int):
+
+        raise NotImplementedError
+
         super().__init__()
         self.dim = dim
         self.board_shape = tuple([3] * dim)
