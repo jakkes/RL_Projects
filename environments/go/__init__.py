@@ -1,25 +1,27 @@
 import torch
 from torch import Tensor, LongTensor, BoolTensor
-from torch.multiprocessing import Pool
 
 from gym import Env
 from gym.spaces import Discrete, Box
 
 
-# @torch.jit.script
-def _next_board(board, player, actions):
+@torch.jit.script
+def _next_board(board, player: int, actions):
+    SIZE = board.shape[-1]
+    ONE = torch.tensor(1.0, dtype=torch.float)
     n = actions.shape[0]
     next_boards = board.unsqueeze(0).expand(n, -1, -1, -1).clone()
-    rows = actions // self._size
-    cols = actions % self._size
-    next_boards[torch.arange(n), player, rows, cols] = 1.0
+    rows = actions // SIZE
+    cols = actions % SIZE
+    next_boards[torch.arange(n), player, rows, cols] = ONE
     return next_boards
 
-# @torch.jit.script
-def _distance_to_empty(boards, player):
+
+@torch.jit.script
+def _distance_to_empty(boards, player: int):
     
     if len(boards.shape) < 4:
-        boards = boards.unsqueeze()
+        boards = boards.unsqueeze(0)
     
     N_BOARDS = boards.shape[0]
     b = torch.arange(N_BOARDS)
@@ -30,61 +32,72 @@ def _distance_to_empty(boards, player):
 
     DIRECTIONS = [-SIZE, 1, SIZE, -1]
     START_INDICES = [
-        (SIZE**2-1-SIZE) + torch.arange(SIZE),
-        SIZE * torch.arange(SIZE),
-        torch.arange(SIZE),
-        SIZE - 1 + SIZE * torch.arange(SIZE)
+        ((SIZE**2-SIZE) + torch.arange(SIZE, dtype=torch.long)).long(),
+        (SIZE * torch.arange(SIZE, dtype=torch.long)).long(),
+        (torch.arange(SIZE, dtype=torch.long)).long(),
+        (SIZE - 1 + SIZE * torch.arange(SIZE, dtype=torch.long))
     ]
 
-    INF = 4 * SIZE
+    INF = torch.tensor(4.0 * SIZE, dtype=torch.float)
+    ZERO = torch.tensor(0.0, dtype=torch.float)
+    FALSE = torch.tensor(False)
     closest = torch.empty(N_BOARDS, SIZE, SIZE).fill_(INF).view(N_BOARDS, -1)
 
-    updated = True
+    updated = torch.tensor(True)
     while updated:
-        updated = False
+        updated = FALSE
 
         for direction, start_index in zip(DIRECTIONS, START_INDICES):
             distance = torch.empty(N_BOARDS, SIZE).fill_(INF)
             index = start_index.clone()
 
             for _ in range(SIZE):
-                reset_mask = ENEMY[b, index]
-                distance[reset_mask].fill_(INF)
+                reset_mask = ENEMY[:, index]
+                distance[reset_mask] = INF
                 
-                empty_mask = EMPTY[b, index]
-                distance[empty_mask].fill_(0)
-
-                increment_mask = ~(reset_mask or empty_mask)
+                empty_mask = EMPTY[:, index]
+                distance[empty_mask] = ZERO
+                
+                increment_mask = ~torch.logical_or(reset_mask, empty_mask)
                 distance[increment_mask] += 1
 
                 closer_mask = distance < closest[:, index]
-                closest[closer_mask] = distance[closer_mask]
+                further_mask = ~closer_mask
+                a = closest[:, index]
+                a[closer_mask] = distance[closer_mask]
+                closest[:, index] = a
+                distance[further_mask] = closest[:, index][further_mask]
 
                 index += direction
 
                 if not updated:
                     updated = closer_mask.sum() > 0
 
-    closest[closest == INF].fill_(-1)
+    closest[closest == INF] = torch.tensor(-1.0, dtype=torch.float)
     return closest.view(N_BOARDS, SIZE, SIZE)
 
 
-def _get_suicidemask(board, player):
+@torch.jit.script
+def _get_suicidemask(board, player: int):
 
     SIZE = board.shape[-1]
     EMPTY = (board == 0).all(0).view(-1)
-    
-    empty_actions = torch.arange(SIZE * SIZE)[empty]
+    mask = torch.zeros(SIZE * SIZE, dtype=torch.bool)
+
+    empty_actions = torch.arange(SIZE * SIZE)[EMPTY]
+    n_actions = empty_actions.shape[0]
+
     next_boards = _next_board(board, player, empty_actions)
     distance_to_empty = _distance_to_empty(next_boards, player)
+    suicidal_actions = distance_to_empty.view(n_actions, -1)[torch.arange(n_actions), empty_actions] < 0
+
+    mask[empty_actions[suicidal_actions]] = torch.tensor(True)
+    return mask.view(SIZE, SIZE)
 
 
 class Go(Env):
-    def __init__(self, board_size: int, pool_processes: int=4):
+    def __init__(self, board_size: int):
         super().__init__()
-
-        self._pool_processes = pool_processes
-        self._pool = Pool(pool_processes)
 
         self._size = board_size
         self._board: Tensor = None
@@ -132,10 +145,11 @@ class Go(Env):
 
     def _update_action_mask(self):
         next_boards = _next_board(self._board, self._player, self._all_actions)
-        maskprevboard = (next_boards != self._prev_board.unsqueeze(0)).any(-1).any(-1).any(-1)
-        maskcurrboard = (next_boards != self._board.unsqueeze(0)).any(-1).any(-1).any(-1)
-        maskfreeplace = self._board[self._player].view(-1) == 0
-        self._action_mask = maskcurrboard and maskprevboard and maskfreeplace
+        maskprevboard: BoolTensor = (next_boards != self._prev_board.unsqueeze(0)).any(-1).any(-1).any(-1)
+        maskcurrboard: BoolTensor = (next_boards != self._board.unsqueeze(0)).any(-1).any(-1).any(-1)
+        maskfreeplace: BoolTensor = self._board[self._player].view(-1) == 0
+        masksuicide: BoolTensor = _get_suicidemask(self._board, self._player)
+        self._action_mask = maskcurrboard.logical_and_(maskprevboard).logical_and_(maskfreeplace).logical_and_(masksuicide).view(-1)
         self._action_mask = torch.cat((self._action_mask, self._true_tensor))
 
     def _compute_reward(self) -> float:
@@ -146,14 +160,14 @@ class Go(Env):
 
     def _place_stone(self, row, col):
         self._board[self._player, row, col] = 1.0
-
+        distance = _distance_to_empty(self.board, 1-self.player)
 
     def step(self, action: int):
         assert action in self.action_space, "Invalid action"
         assert self._action_mask[action], "Invalid action in current state"
 
         self._prev_board = self._board.clone()
-        
+
         if action == self._board ** 2:  # action is pass    
             if self._prev_action == action:     # double pass, game over
                 reward = self._compute_reward()

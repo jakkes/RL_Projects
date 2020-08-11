@@ -1,51 +1,51 @@
-from gym import Env
-from gym.spaces import Discrete
-from gym.spaces import Box
+# from gym import Env
+# from gym.spaces import Discrete
+# from gym.spaces import Box
 
-import torch
+# import torch
 
-@torch.jit.script
-def _check_winning_position(board: torch.Tensor):
+# @torch.jit.script
+# def _check_winning_position(board: torch.Tensor):
     
-    t = torch.arange(3)                # triple vector
-    r = reversed(t)       # reversed triple vector
+#     t = torch.arange(3)                # triple vector
+#     r = reversed(t)       # reversed triple vector
 
-    dims = len(board.shape)
-    for i in range(dims):
-        if any(board.sum(i).abs_() == 3):
-            return True
+#     dims = len(board.shape)
+#     for i in range(dims):
+#         if any(board.sum(i).abs_() == 3):
+#             return True
 
-    for i in range(dims):
-        for j in range(i+1, dims):
-            board[:, ]
+#     for i in range(dims):
+#         for j in range(i+1, dims):
+#             board[:, ]
 
 
-class TicTacToe(Env):
-    def __init__(self, dim: int):
+# class TicTacToe(Env):
+#     def __init__(self, dim: int):
 
-        raise NotImplementedError
+#         raise NotImplementedError
 
-        super().__init__()
-        self.dim = dim
-        self.board_shape = tuple([3] * dim)
+#         super().__init__()
+#         self.dim = dim
+#         self.board_shape = tuple([3] * dim)
         
-        self.observation_space = Box(-1, 1, shape=self.board_shape)
-        self.action_space = Discrete(3 ** dim)
+#         self.observation_space = Box(-1, 1, shape=self.board_shape)
+#         self.action_space = Discrete(3 ** dim)
 
-        self._board = None
-        self._should_reset = True
+#         self._board = None
+#         self._should_reset = True
 
-        self._to_play = 1
+#         self._to_play = 1
 
-    def reset(self):
-        self._board = torch.zeros(*self.board_shape)
-        self._should_reset = False
-        return self._board
+#     def reset(self):
+#         self._board = torch.zeros(*self.board_shape)
+#         self._should_reset = False
+#         return self._board
 
-    def step(self, action):
-        assert self.action_space.contains(action), "invalid action!"
+#     def step(self, action):
+#         assert self.action_space.contains(action), "invalid action!"
 
-        self._board.view(-1)[action] = self._to_play
-        self._to_play = - self._to_play
+#         self._board.view(-1)[action] = self._to_play
+#         self._to_play = - self._to_play
 
 
