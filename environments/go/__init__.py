@@ -18,6 +18,18 @@ def _next_board(board, player: int, actions):
 
 
 @torch.jit.script
+def _distance_to(boards, TO, MEDIUM):
+
+    if len(boards.shape) < 4:
+        boards = boards.unsqueeze(0)
+    
+    N_BOARDS = boards.shape[0]
+    b = torch.arange(N_BOARDS)
+
+    
+
+
+@torch.jit.script
 def _distance_to_empty(boards, player: int):
     
     if len(boards.shape) < 4:
@@ -82,6 +94,7 @@ def _get_suicidemask(board, player: int):
 
     SIZE = board.shape[-1]
     EMPTY = (board == 0).all(0).view(-1)
+    ENEMY = board[1-player] == 1.0
     mask = torch.zeros(SIZE * SIZE, dtype=torch.bool)
 
     empty_actions = torch.arange(SIZE * SIZE)[EMPTY]
@@ -90,6 +103,9 @@ def _get_suicidemask(board, player: int):
     next_boards = _next_board(board, player, empty_actions)
     distance_to_empty = _distance_to_empty(next_boards, player)
     suicidal_actions = distance_to_empty.view(n_actions, -1)[torch.arange(n_actions), empty_actions] < 0
+    
+    enemy_captured = (_distance_to_empty(next_boards, 1-player)[:, ENEMY] < 0).any(1)
+    suicidal_actions.logical_and_(~enemy_captured)
 
     mask[empty_actions[suicidal_actions]] = torch.tensor(True)
     return mask.view(SIZE, SIZE)
@@ -116,10 +132,10 @@ class Go(Env):
         self._i = torch.arange(2)
         self._ri = reversed(self._i)
         self._all_actions = torch.arange(board_size ** 2 + 1)
-        self._true_tensor = torch.tensor(True)
+        self._true_tensor = torch.tensor([True])
 
     def get_state(self) -> torch.Tensor:
-        return self._board if self._next_is_black else self._board[self.ri]
+        return self._board if self._next_is_black else self._board[self._ri]
 
     def reset(self, state: Tensor=None, prev_state: Tensor=None, prev_action: int=None, black_to_play: bool=None, black_captures: int=None, white_captures: int=None):
 
@@ -144,12 +160,12 @@ class Go(Env):
         return self.get_state()
 
     def _update_action_mask(self):
-        next_boards = _next_board(self._board, self._player, self._all_actions)
+        next_boards = _next_board(self._board, self._player, self._all_actions[:-1])
         maskprevboard: BoolTensor = (next_boards != self._prev_board.unsqueeze(0)).any(-1).any(-1).any(-1)
         maskcurrboard: BoolTensor = (next_boards != self._board.unsqueeze(0)).any(-1).any(-1).any(-1)
         maskfreeplace: BoolTensor = self._board[self._player].view(-1) == 0
-        masksuicide: BoolTensor = _get_suicidemask(self._board, self._player)
-        self._action_mask = maskcurrboard.logical_and_(maskprevboard).logical_and_(maskfreeplace).logical_and_(masksuicide).view(-1)
+        masksuicide: BoolTensor = _get_suicidemask(self._board, self._player).view(-1)
+        self._action_mask = maskcurrboard.logical_and_(maskprevboard).logical_and_(maskfreeplace).logical_and_(~masksuicide).view(-1)
         self._action_mask = torch.cat((self._action_mask, self._true_tensor))
 
     def _compute_reward(self) -> float:
@@ -160,7 +176,13 @@ class Go(Env):
 
     def _place_stone(self, row, col):
         self._board[self._player, row, col] = 1.0
-        distance = _distance_to_empty(self.board, 1-self.player)
+        captures = _distance_to_empty(self._board, 1-self._player).squeeze_() < 0
+        self._board[1-self._player, captures] = 0.0
+
+        if self._next_is_black:
+            self._black_captures += captures.sum()
+        else:
+            self._white_captures += captures.sum()
 
     def step(self, action: int):
         assert action in self.action_space, "Invalid action"
@@ -168,13 +190,13 @@ class Go(Env):
 
         self._prev_board = self._board.clone()
 
-        if action == self._board ** 2:  # action is pass    
+        if action == self._size ** 2:  # action is pass    
             if self._prev_action == action:     # double pass, game over
                 reward = self._compute_reward()
                 return None, reward, True
         else:
             row = action // self._size; col = action % self._size
-            captures = self._place_stone(self._board, row, col)
+            captures = self._place_stone(row, col)
 
         self._prev_action = action
         self._next_is_black = not self._next_is_black
