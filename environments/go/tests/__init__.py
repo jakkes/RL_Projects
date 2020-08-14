@@ -197,13 +197,35 @@ def test_go():
         assert (state == true_state).all()
     
     env.step(25)
-    _, _, done = env.step(25)
+    _, reward, done = env.step(25)
 
     assert done
+    assert reward == 1
 
+def test_repeated_state():
+    env = Go(5)
+    env.reset()
+    env.step(1)
+    env.step(2)
+    env.step(5)
+    env.step(6)
+    env.step(11)
+    env.step(12)
+    env.step(15)
+    env.step(8)
+    env.step(7)
+
+    val = False
+    try:
+        env.step(8)
+    except AssertionError:
+        val = True
+
+    assert val
 
 def run_tests():
     test_next_board()
     test_distance_to_empty()
     test_suicide_mask()
     test_go()
+    test_repeated_state()

@@ -18,7 +18,7 @@ def _next_board(board, player: int, actions):
 
 
 @torch.jit.script
-def _distance_to(boards, TO, MEDIUM):
+def _distance_to_stone(boards, player: int):
 
     if len(boards.shape) < 4:
         boards = boards.unsqueeze(0)
@@ -26,7 +26,55 @@ def _distance_to(boards, TO, MEDIUM):
     N_BOARDS = boards.shape[0]
     b = torch.arange(N_BOARDS)
 
-    
+    SIZE = boards.shape[-1]
+    STONE = (boards[b, player] == 1).view(N_BOARDS, -1)
+    OTHER_STONE = (boards[b, 1-player] == 1).view(N_BOARDS, -1)
+
+    DIRECTIONS = [-SIZE, 1, SIZE, -1]
+    START_INDICES = [
+        ((SIZE**2-SIZE) + torch.arange(SIZE, dtype=torch.long)).long(),
+        (SIZE * torch.arange(SIZE, dtype=torch.long)).long(),
+        (torch.arange(SIZE, dtype=torch.long)).long(),
+        (SIZE - 1 + SIZE * torch.arange(SIZE, dtype=torch.long))
+    ]
+
+    INF = torch.tensor(4.0 * SIZE, dtype=torch.float)
+    ZERO = torch.tensor(0.0, dtype=torch.float)
+    FALSE = torch.tensor(False)
+    closest = torch.empty(N_BOARDS, SIZE, SIZE).fill_(INF).view(N_BOARDS, -1)
+
+    updated = torch.tensor(True)
+    while updated:
+        updated = FALSE
+
+        for direction, start_index in zip(DIRECTIONS, START_INDICES):
+            distance = torch.empty(N_BOARDS, SIZE).fill_(INF)
+            index = start_index.clone()
+
+            for _ in range(SIZE):
+                reset_mask = OTHER_STONE[:, index]
+                distance[reset_mask] = INF
+                
+                empty_mask = STONE[:, index]
+                distance[empty_mask] = ZERO
+                
+                increment_mask = ~torch.logical_or(reset_mask, empty_mask)
+                distance[increment_mask] += 1
+
+                closer_mask = distance < closest[:, index]
+                further_mask = ~closer_mask
+                a = closest[:, index]
+                a[closer_mask] = distance[closer_mask]
+                closest[:, index] = a
+                distance[further_mask] = closest[:, index][further_mask]
+
+                index += direction
+
+                if not updated:
+                    updated = closer_mask.sum() > 0
+
+    closest[closest == INF] = torch.tensor(-1.0, dtype=torch.float)
+    return closest.view(N_BOARDS, SIZE, SIZE)
 
 
 @torch.jit.script
@@ -112,7 +160,7 @@ def _get_suicidemask(board, player: int):
 
 
 class Go(Env):
-    def __init__(self, board_size: int):
+    def __init__(self, board_size: int, white_base_score: float=0.0):
         super().__init__()
 
         self._size = board_size
@@ -125,6 +173,7 @@ class Go(Env):
 
         self._black_captures: int = None
         self._white_captures: int = None
+        self._white_base_score: float = white_base_score
 
         self.observation_space = Box(0, 1, shape=(2, board_size, board_size))
         self.action_space = Discrete(board_size ** 2 + 1)
@@ -169,14 +218,22 @@ class Go(Env):
         self._action_mask = torch.cat((self._action_mask, self._true_tensor))
 
     def _compute_reward(self) -> float:
-        raise NotImplementedError
+        empty_space = (self._board == 0).all(0)
+        white_space = (_distance_to_stone(self._board, 0) < 0).logical_and_(empty_space).sum()
+        black_space = (_distance_to_stone(self._board, 1) < 0).logical_and_(empty_space).sum()
+        black_win = black_space + self._black_captures > white_space + self._white_captures + self._white_base_score
+        if self._next_is_black:
+            return 1 if black_win else -1
+        else:
+            return -1 if black_space else 1
 
     def action_mask(self) -> BoolTensor:
         return self._action_mask
 
     def _place_stone(self, row, col):
         self._board[self._player, row, col] = 1.0
-        captures = _distance_to_empty(self._board, 1-self._player).squeeze_() < 0
+        enemy_space = self._board[1-self._player] == 1.0
+        captures = (_distance_to_empty(self._board, 1-self._player).squeeze_() < 0).logical_and_(enemy_space)
         self._board[1-self._player, captures] = 0.0
 
         if self._next_is_black:
@@ -201,5 +258,7 @@ class Go(Env):
         self._prev_action = action
         self._next_is_black = not self._next_is_black
         self._player = 1 - self._player
+
+        self._update_action_mask()
 
         return self.get_state(), 0, False
