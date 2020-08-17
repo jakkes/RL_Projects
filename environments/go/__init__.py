@@ -1,3 +1,5 @@
+import numpy as np
+
 import torch
 from torch import Tensor, LongTensor, BoolTensor
 
@@ -186,6 +188,15 @@ class Go(Env):
     def get_state(self) -> torch.Tensor:
         return self._board if self._next_is_black else self._board[self._ri]
 
+    def get_board(self) -> torch.Tensor:
+        return self._board
+
+    def get_prev_board(self) -> torch.Tensor:
+        return self._prev_board
+
+    def get_prev_state(self) -> torch.Tensor:
+        return self._board[self._ri] if self._next_is_black else self._board
+
     def reset(self, state: Tensor=None, prev_state: Tensor=None, prev_action: int=None, black_to_play: bool=None, black_captures: int=None, white_captures: int=None):
 
         if state is not None:
@@ -212,7 +223,7 @@ class Go(Env):
         next_boards = _next_board(self._board, self._player, self._all_actions[:-1])
         maskprevboard: BoolTensor = (next_boards != self._prev_board.unsqueeze(0)).any(-1).any(-1).any(-1)
         maskcurrboard: BoolTensor = (next_boards != self._board.unsqueeze(0)).any(-1).any(-1).any(-1)
-        maskfreeplace: BoolTensor = self._board[self._player].view(-1) == 0
+        maskfreeplace: BoolTensor = (self._board == 0).all(0).view(-1)
         masksuicide: BoolTensor = _get_suicidemask(self._board, self._player).view(-1)
         self._action_mask = maskcurrboard.logical_and_(maskprevboard).logical_and_(maskfreeplace).logical_and_(~masksuicide).view(-1)
         self._action_mask = torch.cat((self._action_mask, self._true_tensor))
@@ -262,3 +273,23 @@ class Go(Env):
         self._update_action_mask()
 
         return self.get_state(), 0, False
+
+    
+    def render(self, out=print):
+        matrix = np.empty((self._size, self._size), dtype=object)
+        black = (self._board[0] == 1).numpy()
+        white = (self._board[1] == 1).numpy()
+
+        matrix[black] = 'B'
+        matrix[white] = 'W'
+        matrix[(~black) & (~white)] = ' '
+        lines = [
+            ' | '.join(line) for line in matrix
+        ]
+        line_length = len(lines[0])
+        sep = '-' * line_length
+
+        print(sep)
+        for line in lines:
+            print(line)
+            print(sep)
