@@ -3,7 +3,7 @@ from threading import Thread
 from time import sleep
 
 import torch
-from torch import nn, optim, Tensor
+from torch import nn, optim
 
 import matplotlib.pyplot as plt
 
