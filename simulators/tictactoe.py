@@ -11,10 +11,10 @@ _CROSS_DIAG_INDICES = np.array([2, 4, 6]).astype(np.int32)
 class TicTacToe(Simulator):
     
     @classmethod
-    def reset(cls, n: int) -> np.ndarray:
+    def reset_bulk(cls, n: int) -> np.ndarray:
         states = np.zeros((n, 10))
         states[:, -1] = 1.0
-        return states
+        return states, np.ones((n, 9), dtype=np.bool_)
 
     @classmethod
     def check_win(cls, states: np.ndarray) -> np.ndarray:
@@ -59,8 +59,43 @@ class TicTacToe(Simulator):
         loss = cls.check_loss(next_states)
         rewards[loss] = -1.0
 
-        terminals = win | loss
+        terminals = win | loss | np.all(next_states != 0, axis=1)
 
         next_states[batchvec, -1] = -states[batchvec, -1]
 
-        return next_states, rewards, terminals, [{} for _ in range(batchvec.shape[0])]
+        return next_states, next_states[:, :9] == 0, rewards, terminals, [{} for _ in range(batchvec.shape[0])]
+
+    @classmethod
+    def render(cls, state: np.ndarray):
+
+        def tile(value) -> str:
+            if value == 0:
+                return " "
+            elif value == 1:
+                return "X"
+            elif value == -1:
+                return "O"
+            else:
+                raise ValueError(f"Unexpected value {value}")
+
+        print(f"""
+        | --- | --- | --- |         | --- | --- | --- |
+        |  {tile(state[0])}  |  {tile(state[1])}  |  {tile(state[2])}  |         |  0  |  1  |  2  |
+        | --- | --- | --- |         | --- | --- | --- |
+        |  {tile(state[3])}  |  {tile(state[4])}  |  {tile(state[5])}  |         |  3  |  4  |  5  |
+        | --- | --- | --- |         | --- | --- | --- |
+        |  {tile(state[6])}  |  {tile(state[7])}  |  {tile(state[8])}  |         |  6  |  7  |  8  |
+        | --- | --- | --- |         | --- | --- | --- |
+        """)
+
+    @classmethod
+    def render_action_map(cls):
+        print(f"""
+        | --- | --- | --- |
+        |  0  |  1  |  2  |
+        | --- | --- | --- |
+        |  3  |  4  |  5  |
+        | --- | --- | --- |
+        |  6  |  7  |  8  |
+        | --- | --- | --- |
+        """)
