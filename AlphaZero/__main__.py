@@ -49,34 +49,38 @@ def run_episode(simulator: Simulator, network: Network, config: AlphaZeroConfig)
         root = root.children[action]
 
     states = torch.as_tensor(np.stack(states), dtype=torch.float)
-    action_masks = torch.stack(action_masks)
+    action_masks = torch.as_tensor(np.stack(action_masks))
+    action_policies = torch.as_tensor(np.stack(action_policies), dtype=torch.float)
     z = torch.ones(states.shape[0])
     i = torch.arange(1, states.shape[0]+1, 2)
     j = torch.arange(2, states.shape[0]+1, 2)
     z[-i] *= reward
     z[-j] *= -reward
 
-    return torch.stack(states), torch.stack(action_masks), torch.stack(action_policies), z
-
-
-def train_step(network: nn.Module, optimizer: optim.Optimizer, states: Tensor,
-               action_masks: Tensor, action_policies: Tensor, z: Tensor):
-    p, v = network(states, action_masks)
-    loggedp = torch.log_softmax(p, dim=1)
-    loggedp[action_policies == 0] = 0
-
-    loss = (z - v).square().mean() - \
-        (action_policies * loggedp).sum(dim=1).mean()
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+    return states, action_masks, action_policies, z
 
 
 def main():
     network = Network()
-    optimizer = optim.Adam(network.parameters(), lr=1e-4)
+    optimizer = optim.Adam(network.parameters(), lr=1e-3)
     config = AlphaZeroConfig()
-    run_episode(TicTacToe, network, config)
+
+    for _ in range(100):
+        batch_states, batch_action_masks, batch_action_policies, batch_z = [], [], [], []
+        for _ in range(8):
+            states, action_masks, action_policies, z = run_episode(TicTacToe, network, config)
+            indices = torch.randint(0, states.shape[0], (4, ))
+            batch_states.append(states[indices])
+            batch_action_masks.append(action_masks[indices])
+            batch_action_policies.append(action_policies[indices])
+            batch_z.append(z[indices])
+
+        batch_states = torch.cat(batch_states)
+        batch_action_masks = torch.cat(batch_action_masks)
+        batch_action_policies = torch.cat(batch_action_policies)
+        batch_z = torch.cat(batch_z)
+
+        train_step(network, optimizer, batch_states, batch_action_masks, batch_action_policies, batch_z)
 
 
 if __name__ == "__main__":
