@@ -22,7 +22,7 @@ class Simulator:
         return next_states[0], next_action_masks[0], rewards[0], terminals[0], infos[0]
 
     @abstractclassmethod
-    def step_bulk(cls, states: np.ndarray, actions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
+    def step_bulk(cls, states: np.ndarray, actions: np.ndarray, terminal_masks: np.ndarray=None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
         raise NotImplementedError
 
     @abstractclassmethod

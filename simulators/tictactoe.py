@@ -40,20 +40,23 @@ class TicTacToe(Simulator):
         return cls.check_win(states)
 
     @classmethod
-    def step_bulk(cls, states: np.ndarray, actions: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
+    def step_bulk(cls, states: np.ndarray, actions: np.ndarray, terminal_masks: np.ndarray=None) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
 
         if np.any(cls.check_loss(states)) or np.any(cls.check_win(states)):
             raise ValueError("Cannot step from a state already in a win condition.")
-        
+
         next_states = states.copy()
         batchvec = np.arange(next_states.shape[0])
+        if terminal_masks is not None:
+            batchvec = batchvec[~terminal_masks]
+            actions = actions[~terminal_masks]
 
         if np.any(next_states[batchvec, actions] != 0.0):
             raise ValueError("Cannot place a piece at an already occupied spot")
 
         next_states[batchvec, actions] = next_states[batchvec, -1]
         
-        rewards = np.zeros(batchvec.shape[0])
+        rewards = np.zeros(next_states.shape[0])
         win = cls.check_win(next_states)
         rewards[win] = 1.0
         loss = cls.check_loss(next_states)
@@ -63,7 +66,7 @@ class TicTacToe(Simulator):
 
         next_states[batchvec, -1] = -states[batchvec, -1]
 
-        return next_states, next_states[:, :9] == 0, rewards, terminals, [{} for _ in range(batchvec.shape[0])]
+        return next_states, next_states[:, :9] == 0, rewards, terminals, [{} for _ in range(next_states.shape[0])]
 
     @classmethod
     def render(cls, state: np.ndarray):
