@@ -71,19 +71,18 @@ class Node:
         return distribution / np.sum(distribution)
 
     def select(self) -> Node:
-
         if self.is_terminal:
             return self
 
-        Q = self._W / self._N
-        Q[self._N == 0] = 0
+        Q = np.zeros_like(self._N)
+        mask = self._N > 0
+        Q[mask] = self._W[mask] / self._N[mask]
         U = self._P * np.sqrt(np.sum(self._N)) / (1 + self._N)
         QU = Q + self._config.c * U
         QU[~self._action_mask] = -np.inf
         return self._children[np.argmax(QU)]
 
     def expand(self):
-
         if self.is_terminal:
             return
 
@@ -112,7 +111,8 @@ class Node:
     def rollout_and_backpropagate(self):
         state = self.state
         terminal = self.is_terminal
-        reward = self.reward
+        reward = - self.reward
+        rewardflip = 1
         action_mask = self.action_mask
 
         while not terminal:
@@ -126,7 +126,9 @@ class Node:
             action = choice(p).item()
             state, action_mask, reward, terminal, _ = self._simulator.step(
                 state, action)
+            rewardflip *= -1
 
+        reward = rewardflip * reward
         self.parent._backpropagate(self._action, -reward)
 
     def _backpropagate(self, action: int, reward: float):
