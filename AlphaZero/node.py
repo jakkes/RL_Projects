@@ -115,6 +115,8 @@ class Node:
         rewardflip = 1
         action_mask = self.action_mask
 
+        first_action = None
+
         while not terminal:
             with torch.no_grad():
                 p, _ = self._network(
@@ -124,12 +126,14 @@ class Node:
                 )
             p = torch.softmax(p, dim=1)
             action = choice(p).item()
+            if first_action is None:
+                first_action = action
             state, action_mask, reward, terminal, _ = self._simulator.step(
                 state, action)
             rewardflip *= -1
 
         reward = rewardflip * reward
-        self.parent._backpropagate(self._action, -reward)
+        self._backpropagate(first_action, reward)
 
     def _backpropagate(self, action: int, reward: float):
         self._N[action] += 1
