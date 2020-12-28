@@ -18,7 +18,6 @@ def mcts(state: np.ndarray, action_mask: np.ndarray, simulator: Simulator, netwo
 
         if not node.is_terminal:
             node.expand()
-            node = node.select()
 
         node.rollout_and_backpropagate()
     return root
