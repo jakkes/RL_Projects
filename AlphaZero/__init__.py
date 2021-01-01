@@ -7,8 +7,9 @@ from .config import AlphaZeroConfig
 from .node import Node
 
 
-def mcts(state: np.ndarray, action_mask: np.ndarray, simulator: Simulator, network: nn.Module, config: AlphaZeroConfig, simulations: int = 20, root_node: Node=None):
+def mcts(state: np.ndarray, action_mask: np.ndarray, simulator: Simulator, network: nn.Module, config: AlphaZeroConfig, simulations: int = 50, root_node: Node=None):
     root = Node(state, action_mask, simulator, network, config=config) if root_node is None else root_node
+    root.rootify()
 
     for _ in range(simulations):
         node = root
@@ -33,6 +34,5 @@ def train_step(network: nn.Module, optimizer: optim.Optimizer, states: Tensor,
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    
-    print(loss)
-    print(z.abs().mean())
+
+    return loss.detach()

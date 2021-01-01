@@ -67,7 +67,7 @@ class Node:
 
     @property
     def action_policy(self):
-        distribution = np.power(self._N, self._config.T)
+        distribution = np.power(self._N, 1 / self._config.T)
         return distribution / np.sum(distribution)
 
     def select(self) -> Node:
@@ -108,14 +108,27 @@ class Node:
         self._N = np.zeros(self._action_mask.shape[0])
         self._W = np.zeros(self._action_mask.shape[0])
 
+        if self.is_root:
+            d = np.random.dirichlet(self._config.alpha * np.ones(self._action_mask.shape[0])[self._action_mask])
+            self._P[self._action_mask] = (1 - self._config.epsilon) * self._P[self._action_mask] + self._config.epsilon * d
+
+
     def rollout_and_backpropagate(self):
+
+        if self.is_terminal:
+            if self.is_root:
+                raise ValueError("Root node is terminal")
+
+            self.parent._backpropagate(self.action, self.reward)
+            return
+
         state = self.state
-        terminal = self.is_terminal
-        reward = - self.reward
+        terminal = False
         rewardflip = 1
         action_mask = self.action_mask
 
         first_action = None
+        reward = 0
 
         while not terminal:
             with torch.no_grad():
@@ -132,8 +145,7 @@ class Node:
                 state, action)
             rewardflip *= -1
 
-        reward = rewardflip * reward
-        self._backpropagate(first_action, reward)
+        self._backpropagate(first_action, rewardflip * reward)
 
     def _backpropagate(self, action: int, reward: float):
         self._N[action] += 1
@@ -141,3 +153,11 @@ class Node:
 
         if self.parent is not None:
             self.parent._backpropagate(self.action, -reward)
+
+    def rootify(self):
+        if self.is_terminal:
+            raise ValueError("Cannot rootify a terminal state.")
+        self._parent = None
+        self._action = None
+        self._reward = None
+        self._terminal = False
