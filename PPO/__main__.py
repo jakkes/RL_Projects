@@ -11,10 +11,10 @@ from utils.env import ParallelEnv
 
 from . import PPOAgent, PPOConfig
 
-ACTORS = 8
-TRAIN_STEPS = 16 # per actor
+ACTORS = 2
+TRAIN_STEPS = 64 # per actor
 EPOCHS = 10
-STEPS = 2   # steps to repeat action
+STEPS = 1   # steps to repeat action
 
 class Training(Thread):
     def __init__(self):
