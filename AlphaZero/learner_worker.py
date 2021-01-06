@@ -1,20 +1,26 @@
+import os
+from time import time, perf_counter
+
 from queue import Empty
 
 import torch
-from torch import nn, optim, Tensor
+from torch import nn, optim, Tensor, jit
 from torch.multiprocessing import Process, Queue
 
 from .config import AlphaZeroConfig
 
 
 class LearnerWorker(Process):
-    def __init__(self, network: nn.Module, optimizer: optim.Optimizer, config: AlphaZeroConfig, sample_queue: Queue, learner_logging_queue: Queue=None):
+    def __init__(self, network: nn.Module, optimizer: optim.Optimizer, config: AlphaZeroConfig, sample_queue: Queue, learner_logging_queue: Queue=None, save_path: str=None):
         super().__init__()
         self.network = network
         self.optimizer = optimizer
         self.config = config
         self.sample_queue = sample_queue
         self.learner_logging_queue = learner_logging_queue
+        self.save_path = save_path
+
+        self.last_save_time = None
 
     def train_step(self, states: Tensor, masks: Tensor, policies: Tensor, z: Tensor):
         p, v = self.network(states, masks)
@@ -29,10 +35,23 @@ class LearnerWorker(Process):
         if self.learner_logging_queue is not None:
             self.learner_logging_queue.put_nowait(loss.detach())
 
+        if perf_counter() - self.last_save_time > 600:
+            self.save(states, masks)
+            self.last_save_time = perf_counter()
+
+    def save(self, states: Tensor, masks: Tensor):
+        if self.save_path is None:
+            return
+
+        model = jit.trace(self.network, (states, masks))
+        jit.save(model, os.path.join(self.save_path, str(int(time()))))
+
     def run(self):
         batch_states, batch_masks, batch_policies, batch_z = [], [], [], []
         L = 0
+        self.last_save_time = perf_counter()
         while True:
+
             try:
                 states, masks, policies, z = self.sample_queue.get(timeout=5)
                 N = states.shape[0]

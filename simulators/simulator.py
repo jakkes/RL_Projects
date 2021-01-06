@@ -33,3 +33,7 @@ class Simulator:
     def reset(cls) -> Tuple[np.ndarray, np.ndarray]:
         a, b = cls.reset_bulk(1)
         return a[0], b[0]
+
+    @abstractclassmethod
+    def render(cls, state):
+        pass
