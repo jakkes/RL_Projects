@@ -31,8 +31,6 @@ class Node:
         self._children: List[Node] = None
         self._expanded: bool = False
 
-        self._init_pv()
-
     @property
     def is_leaf(self):
         return self._children is None
@@ -94,6 +92,8 @@ class Node:
         if self._expanded:
             return
 
+        self._init_pv()
+
         if not self.is_terminal:
             actions = np.arange(self._action_mask.shape[0])[self._action_mask]
             states = np.expand_dims(self._state, 0)
@@ -116,7 +116,10 @@ class Node:
         if self.is_root:
             return
 
-        self.parent._backpropagate(self._action, -self._V)
+        if self.is_terminal:
+            self.parent._backpropagate(self._action, self._reward)
+        else:
+            self.parent._backpropagate(self._action, -self._V)
 
     def _backpropagate(self, action: int, value: float):
         self._N[action] += 1
@@ -135,10 +138,14 @@ class Node:
         self._P = torch.softmax(p, dim=1).squeeze_(0).numpy()
         self._V = v[0, 0].numpy()
 
-    def rootify(self):
-
         if self.is_root:
-            return
+            self.add_noise()
+
+    def add_noise(self):
+        d = np.random.dirichlet(self._config.alpha * np.ones(self._action_mask.shape[0])[self._action_mask])
+        self._P[self._action_mask] = (1 - self._config.epsilon) * self._P[self._action_mask] + self._config.epsilon * d
+
+    def rootify(self):
 
         if self.is_terminal:
             raise ValueError("Cannot rootify a terminal state.")
@@ -148,5 +155,5 @@ class Node:
         self._reward = None
         self._terminal = False
 
-        d = np.random.dirichlet(self._config.alpha * np.ones(self._action_mask.shape[0])[self._action_mask])
-        self._P[self._action_mask] = (1 - self._config.epsilon) * self._P[self._action_mask] + self._config.epsilon * d
+        if self._P is not None:
+            self.add_noise()

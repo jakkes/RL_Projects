@@ -7,8 +7,9 @@ from .node import Node
 from .config import AlphaZeroConfig
 
 
-def mcts(state: np.ndarray, action_mask: np.ndarray, simulator: Simulator, network: nn.Module, config: AlphaZeroConfig, simulations: int = 50, root_node: Node=None):
-    root = Node(state, action_mask, simulator, network, config=config) if root_node is None else root_node
+def mcts(state: np.ndarray, action_mask: np.ndarray, simulator: Simulator, network: nn.Module, config: AlphaZeroConfig, simulations: int = 50, root_node: Node = None) -> Node:
+    root = Node(state, action_mask, simulator, network,
+                config=config) if root_node is None else root_node
     root.rootify()
 
     for _ in range(simulations):
