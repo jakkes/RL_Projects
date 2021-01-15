@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class SelfPlayWorker(Process):
-    def __init__(self, simulator: Simulator, network: nn.Module, config: AlphaZeroConfig, sample_queue: Queue, episode_logging_queue: Queue=None):
+    def __init__(self, simulator: Simulator, network: nn.Module, config: AlphaZeroConfig, sample_queue: Queue, episode_logging_queue: Queue = None):
         super().__init__()
         self.simulator = simulator
         self.network = network
@@ -44,7 +44,7 @@ class SelfPlayWorker(Process):
         root = None
         while not terminal:
             root = mcts(state, action_mask, self.simulator,
-                        self.network, self.config, root_node=root)
+                        self.network, self.config, root_node=root, simulations=self.config.simulations)
 
             action_policy = root.action_policy
             if first_action_policy is None:
@@ -59,12 +59,15 @@ class SelfPlayWorker(Process):
             if first_action is None:
                 first_action = action
 
-            state, action_mask, reward, terminal, _ = self.simulator.step(state, action)
+            state, action_mask, reward, terminal, _ = self.simulator.step(
+                state, action)
             root = root.children[action]
 
         if self.episode_logging_queue is not None:
-            kl_div = -(first_action_policy * torch.log_softmax(start_prior, dim=0).numpy()).sum()
-            self.episode_logging_queue.put_nowait((abs(reward), start_value, kl_div, first_action))
+            kl_div = -(first_action_policy *
+                       torch.log_softmax(start_prior, dim=0).numpy()).sum()
+            self.episode_logging_queue.put_nowait(
+                (abs(reward), start_value, kl_div, first_action))
 
         states = torch.as_tensor(np.stack(states), dtype=torch.float)
         action_masks = torch.as_tensor(np.stack(action_masks))

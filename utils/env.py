@@ -32,7 +32,7 @@ class ParallelEnv:
         return torch.as_tensor(np.stack(states), dtype=torch.float), torch.tensor(rewards), torch.tensor(dones), {}
 
     def reset(self, mask: Iterable[bool]=None):
-        envs = self.envs if mask is None else self.envs[mask]
+        envs = self.envs if mask is None else self.envs[mask.numpy()]
 
         states = []
         for env in envs:

@@ -61,7 +61,7 @@ def play(simulator: Simulator, network: nn.Module, config: AlphaZeroConfig):
             action = int(input("Action: "))
         else:
             root = mcts(state, mask, simulator,
-                        network, config, root_node=root, simulations=100)
+                        network, config, root_node=root, simulations=config.simulations)
             action = np.random.choice(mask.shape[0], p=root.action_policy)
 
         state, mask, reward, terminal, _ = simulator.step(state, action)
@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     if not args.play:
         net = Network()
-        train(4, TicTacToe, net, optim.Adam(net.parameters(), lr=1e-4, weight_decay=1e-5), AlphaZeroConfig(), args.save_path)
+        train(4, TicTacToe, net, optim.SGD(net.parameters(), lr=1e-4, weight_decay=1e-5), AlphaZeroConfig(), args.save_path)
 
     else:
         net = jit.load(args.save_path)

@@ -11,7 +11,7 @@ from utils.env import ParallelEnv
 
 from . import PPOAgent, PPOConfig
 
-ACTORS = 2
+ACTORS = 1
 TRAIN_STEPS = 64 # per actor
 EPOCHS = 10
 STEPS = 1   # steps to repeat action
@@ -23,15 +23,15 @@ class Training(Thread):
 
     def run(self):
         val_net = lambda: nn.Sequential(
-            nn.Linear(8, 64), nn.ReLU(inplace=True),
-            nn.Linear(64, 64), nn.ReLU(inplace=True),
-            nn.Linear(64, 1)
+            nn.Linear(4, 32), nn.ReLU(inplace=True),
+            nn.Linear(32, 32), nn.ReLU(inplace=True),
+            nn.Linear(32, 1)
         )
 
         pol_net = lambda: nn.Sequential(
-            nn.Linear(8, 64), nn.ReLU(inplace=True),
-            nn.Linear(64, 64), nn.ReLU(inplace=True),
-            nn.Linear(64, 4), nn.Softmax(dim=1)
+            nn.Linear(4, 32), nn.ReLU(inplace=True),
+            nn.Linear(32, 32), nn.ReLU(inplace=True),
+            nn.Linear(32, 2), nn.Softmax(dim=1)
         )
 
         config = PPOConfig(
@@ -39,14 +39,14 @@ class Training(Thread):
             policy_net_gen=pol_net,
             value_net_gen=val_net,
             optimizer=optim.Adam,
-            optimizer_params={'lr': 5e-5},
+            optimizer_params={'lr': 1e-4},
             discount=0.99,
             gae_discount=0.95
         )
 
         agent = PPOAgent(config)
 
-        env_gen_fn = lambda: gym.make("LunarLander-v2")
+        env_gen_fn = lambda: gym.make("CartPole-v0")
         env = ParallelEnv(env_gen_fn, ACTORS, no_repeats=STEPS)
         start_states = env.reset()
         state_shape = start_states.shape[1:]
@@ -62,10 +62,10 @@ class Training(Thread):
 
             states[:, 0] = states[:, -1]
             for k in range(TRAIN_STEPS):
-                
+
                 with torch.no_grad():
                     actions[:, k] = agent.get_actions(states[:, k])
-                
+
                 s, r, d, _ = env.step(actions[:, k])
                 states[:, k+1] = s
                 rewards[:, k] = r
