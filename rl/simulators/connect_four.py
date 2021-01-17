@@ -15,6 +15,7 @@ class ConnectFour(Simulator):
 
     @classmethod
     def compute_rewards(cls, states: np.ndarray, players: np.ndarray):
+
         players = 4 * players.reshape((-1, 1, 1))
 
         win_horisontal = convolve(states, np.ones((1, 1, 4)), mode="valid") == players
@@ -65,7 +66,7 @@ class ConnectFour(Simulator):
             raise ValueError("Cannot place a piece in an already full column")
 
         next_states[batchvec, 5 - heights[batchvec, actions], actions] = players[batchvec]
-        heights[batchvec] += 1
+        heights[batchvec, actions] += 1
         rewards = cls.compute_rewards(next_states, players)
         terminals = (rewards != 0) | np.all(heights == 6, axis=1)
 

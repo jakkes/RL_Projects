@@ -31,6 +31,9 @@ class Node:
         self._children: List[Node] = None
         self._expanded: bool = False
 
+        if np.all(self._action_mask == False) and not self._terminal:
+            print("Stop")
+
     @property
     def is_leaf(self):
         return self._children is None

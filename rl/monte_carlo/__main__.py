@@ -1,6 +1,6 @@
 from random import randrange
 from rl.simulators import TicTacToe
-from MonteCarlo import MonteCarlo
+from rl.monte_carlo import MonteCarlo
 
 
 def main():
